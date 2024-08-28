@@ -106,7 +106,6 @@ class FoodTracker extends NeedTracker {
   }
 
   plan(planner: Groblin, view: WorldView) {
-    console.log(view.objects.edible.length);
     const food = view.objects.edible.length > 0 ? view.objects.edible[0] : null;
     if (food) {
       if (view.collidingPairs.get(planner).has(food)) {

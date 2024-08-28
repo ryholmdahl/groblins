@@ -6,6 +6,7 @@ import { PixiWorld } from "./world";
 import { FoodTracker, RelaxTracker } from "./groblin";
 import type { Groblin } from "./groblin";
 import type { Edible, Block } from "./objects";
+import { generateTerrain } from "./mapgen";
 
 async function createApp() {
   // Create a PixiJS application.
@@ -28,9 +29,31 @@ async function createApp() {
     block: await Assets.load(blockPng)
   });
 
-  const groblin = world.add<Groblin>({
+  const terrain = generateTerrain(50, 20);
+  terrain.forEach(({ x, y }) => {
+    for (let i = 49; i > y; i--) {
+      world.add<Block>({
+        x,
+        y: i,
+        width: 1,
+        height: 1,
+        group: 1,
+        exposed: {
+          top: true,
+          bottom: true,
+          left: true,
+          right: true
+        },
+        collidesWith: new Set([0]),
+        collidable: true,
+        block: true
+      });
+    }
+  });
+
+  world.add<Groblin>({
     x: 10,
-    y: 10,
+    y: 0,
     width: 0.75,
     height: 0.75,
     density: 1,
@@ -51,9 +74,9 @@ async function createApp() {
     groblin: true
   });
 
-  const berry = world.add<Edible>({
+  world.add<Edible>({
     x: 20,
-    y: 10,
+    y: 0,
     width: 1,
     height: 1,
     density: 1,
@@ -66,59 +89,6 @@ async function createApp() {
     movable: true,
     edible: true
   });
-
-  for (let i = 0; i < 20; i++) {
-    world.add<Block>({
-      x: 10 + i,
-      y: 20,
-      width: 1,
-      height: 1,
-      group: 1,
-      collidesWith: new Set([0]),
-      collidable: true,
-      block: true
-    });
-  }
-  world.add<Block>({
-    x: 21,
-    y: 19,
-    width: 1,
-    height: 1,
-    group: 1,
-    collidesWith: new Set([0]),
-    collidable: true,
-    block: true
-  });
-  world.add<Block>({
-    x: 15,
-    y: 19,
-    width: 1,
-    height: 1,
-    group: 1,
-    collidesWith: new Set([0]),
-    collidable: true,
-    block: true
-  });
-  world.add<Block>({
-    x: 15,
-    y: 17,
-    width: 1,
-    height: 1,
-    group: 1,
-    collidesWith: new Set([0]),
-    collidable: true,
-    block: true
-  });
-
-  // Add to stage.
-  //   app.stage.addChild(bunny);
-
-  //   // Center the sprite's anchor point.
-  //   bunny.anchor.set(0.5);
-
-  //   // Move the sprite to the center of the screen.
-  //   bunny.x = app.screen.width / 2;
-  //   bunny.y = app.screen.height / 2;
 
   // Add an animation loop callback to the application's ticker.
   app.ticker.add((time) => {

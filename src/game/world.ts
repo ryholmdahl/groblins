@@ -26,6 +26,7 @@ type Components = {
 
 const GROBLIN_JUMP_HEIGHT = 1;
 const GROBLIN_MAX_SPEED = 0.1;
+const TERMINAL_VELOCITY = 1;
 
 function isInstance<T extends keyof Components>(
   object: Components[T] | WorldObject,
@@ -135,10 +136,25 @@ class World {
   }
 
   tick(delta: number): void {
-    // update position of movables
+    // check which sides of each block are exposed
+    // TODO: make this more efficient; only run it once and when a block is removed
+    this.view.objects.block.forEach((block) => {
+      block.exposed.left = !this.view.objects.block.some(
+        (other) => other.y === block.y && other.x === block.x - 1
+      );
+      block.exposed.right = !this.view.objects.block.some(
+        (other) => other.y === block.y && other.x === block.x + 1
+      );
+      block.exposed.top = !this.view.objects.block.some(
+        (other) => other.y === block.y - 1 && other.x === block.x
+      );
+      block.exposed.bottom = !this.view.objects.block.some(
+        (other) => other.y === block.y + 1 && other.x === block.x
+      );
+    });
     this.view.objects.movable.forEach((movable) => {
-      if (!movable.landed) {
-        movable.velocity.y += 0.05;
+      if (!movable.landed && movable.velocity.y < TERMINAL_VELOCITY) {
+        movable.velocity.y += delta;
       }
     });
     // update groblins
@@ -163,14 +179,14 @@ class World {
           // Check if there's a block in front of the groblin
           const blockInFront = this.view.objects.block.some(
             (block) =>
-              Math.abs(block.x - (groblin.x + directionX)) <
-                Math.min(1, Math.abs(to.x - groblin.x)) && Math.abs(block.y - groblin.y) < 0.5
+              Math.abs(block.x - groblin.x) <= 2 &&
+              Math.sign(block.x - groblin.x) === directionX &&
+              Math.abs(block.y - groblin.y) < 0.5
           );
 
           if (blockInFront && groblin.landed) {
-            // If there's a block, jump over it
-            const jumpHeight = GROBLIN_JUMP_HEIGHT; // Adjust this value to change jump height
-            groblin.velocity.y = -Math.sqrt(2 * 0.05 * jumpHeight); // Calculate initial velocity for desired jump height
+            const jumpHeight = GROBLIN_JUMP_HEIGHT;
+            groblin.velocity.y = -Math.sqrt(0.04 * jumpHeight);
           }
         }
       }
@@ -197,27 +213,35 @@ class World {
           [object2, object1]
         ].forEach(([o1, o2]) => {
           if (isInstance(o1, "movable") && isInstance(o2, "block")) {
-            if (o1.velocity.y > 0 && o1.y + o1.height / 2 <= o2.y - o2.height / 2 + o1.velocity.y) {
+            if (
+              o2.exposed.top &&
+              o1.velocity.y > 0 &&
+              o1.y + o1.height / 2 <= o2.y - o2.height / 2 + o1.velocity.y
+            ) {
               o1.velocity.y = 0;
               o1.y = o2.y - o2.height / 2 - o1.height / 2;
               o1.landed = true;
-            } else {
-              if (o1.velocity.x > 0 && o1.x + o1.width / 2 <= o2.x - o2.width / 2 + o1.velocity.x) {
-                o1.velocity.x = 0;
-                o1.x = o2.x - o2.width / 2 - o1.width / 2;
-              } else if (
-                o1.velocity.y < 0 &&
-                o1.y - o1.height / 2 >= o2.y + o2.height / 2 + o1.velocity.y
-              ) {
-                o1.velocity.y = 0;
-                o1.y = o2.y + o2.height / 2 + o1.height / 2;
-              } else if (
-                o1.velocity.x < 0 &&
-                o1.x - o1.width / 2 >= o2.x + o2.width / 2 + o1.velocity.x
-              ) {
-                o1.velocity.x = 0;
-                o1.x = o2.x + o2.width / 2 + o1.width / 2;
-              }
+            } else if (
+              o2.exposed.left &&
+              o1.velocity.x > 0 &&
+              o1.x + o1.width / 2 <= o2.x - o2.width / 2 + o1.velocity.x
+            ) {
+              o1.velocity.x = 0;
+              o1.x = o2.x - o2.width / 2 - o1.width / 2;
+            } else if (
+              o2.exposed.bottom &&
+              o1.velocity.y < 0 &&
+              o1.y - o1.height / 2 >= o2.y + o2.height / 2 + o1.velocity.y
+            ) {
+              o1.velocity.y = 0;
+              o1.y = o2.y + o2.height / 2 + o1.height / 2;
+            } else if (
+              o2.exposed.right &&
+              o1.velocity.x < 0 &&
+              o1.x - o1.width / 2 >= o2.x + o2.width / 2 + o1.velocity.x
+            ) {
+              o1.velocity.x = 0;
+              o1.x = o2.x + o2.width / 2 + o1.width / 2;
             }
           }
         });

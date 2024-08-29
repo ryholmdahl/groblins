@@ -1,5 +1,5 @@
-import type { Application, Texture } from "pixi.js";
-import { Sprite } from "pixi.js";
+import type { Application, ContainerChild, TextStyle, TextStyleOptions, Texture } from "pixi.js";
+import { Sprite, BitmapText } from "pixi.js";
 import { Groblin } from "./groblin";
 import type { WorldObject, Collidable, Edible, Movable, Block } from "./objects";
 import type { Entries } from "type-fest";
@@ -24,9 +24,12 @@ type Components = {
   block: Block;
 };
 
-const GROBLIN_JUMP_HEIGHT = 1;
-const GROBLIN_MAX_SPEED = 0.1;
+const GROBLIN_MAX_SPEED = 0.07;
 const TERMINAL_VELOCITY = 1;
+const BERRY_TIMER_MAX = 2;
+const GROBLIN_VISION = 10;
+const GRAVITY = 3;
+const JUMP_POP = 0.07;
 
 function isInstance<T extends keyof Components>(
   object: Components[T] | WorldObject,
@@ -73,6 +76,8 @@ class World {
   };
   collidablePairs: [Collidable, Collidable][] = [];
   positions: Map<{ x: number; y: number }, Array<WorldObject>> = new Map();
+  berryTimer: number = BERRY_TIMER_MAX;
+  initialized: boolean = false;
 
   constructor(width: number, height: number) {
     this.width = width;
@@ -135,10 +140,8 @@ class World {
     };
   }
 
-  tick(delta: number): void {
-    // check which sides of each block are exposed
-    // TODO: make this more efficient; only run it once and when a block is removed
-    this.view.objects.block.forEach((block) => {
+  private checkExposure() {
+    this.view.objects.block.forEach((block: Block) => {
       block.exposed.left = !this.view.objects.block.some(
         (other) => other.y === block.y && other.x === block.x - 1
       );
@@ -152,51 +155,144 @@ class World {
         (other) => other.y === block.y + 1 && other.x === block.x
       );
     });
-    this.view.objects.movable.forEach((movable) => {
-      if (!movable.landed && movable.velocity.y < TERMINAL_VELOCITY) {
-        movable.velocity.y += delta;
+  }
+
+  tick(delta: number): void {
+    const applyGravity = (movable: Movable) => {
+      {
+        if (!movable.landed && movable.velocity.y < TERMINAL_VELOCITY) {
+          movable.velocity.y += delta * GRAVITY;
+        }
       }
-    });
-    // update groblins
-    this.view.objects.groblin.forEach((groblin) => {
+    };
+
+    const groblinSetPlan = (groblin: Groblin) => {
       Object.entries(groblin.needs).forEach(([need, tracker]) => {
         tracker.tick(delta);
         if (!groblin.priority || tracker.urgency() > groblin.needs[groblin.priority].urgency()) {
           groblin.priority = need as Groblin["priority"];
         }
       });
-      groblin.plan = groblin.needs[groblin.priority!].plan(groblin, this.getView(groblin, 100));
-      if (groblin.plan && groblin.plan.type === "move") {
-        // check if object is to the left or to the right of the groblin
-        const to = groblin.plan.to;
-        const directionX = Math.sign(to.x - groblin.x);
+      groblin.plan = groblin.needs[groblin.priority!].plan(
+        groblin,
+        this.getView(groblin, GROBLIN_VISION)
+      );
+    };
 
-        // move towards it, jumping over 1 block height if necessary
-        if (directionX !== 0) {
-          if (Math.abs(groblin.velocity.x) < GROBLIN_MAX_SPEED) {
-            groblin.velocity.x += delta * directionX;
-          }
-          // Check if there's a block in front of the groblin
-          const blockInFront = this.view.objects.block.some(
-            (block) =>
-              Math.abs(block.x - groblin.x) <= 2 &&
-              Math.sign(block.x - groblin.x) === directionX &&
-              Math.abs(block.y - groblin.y) < 0.5
-          );
+    const groblinMove = (groblin: Groblin, to: { x: number; y: number }) => {
+      const directionX = Math.sign(to.x - groblin.x);
 
-          if (blockInFront && groblin.landed) {
-            const jumpHeight = GROBLIN_JUMP_HEIGHT;
-            groblin.velocity.y = -Math.sqrt(0.04 * jumpHeight);
-          }
+      if (directionX !== 0) {
+        const blockInFront = this.view.objects.block.some(
+          (block) =>
+            Math.abs(block.x - groblin.x) <= 1 &&
+            Math.sign(block.x - groblin.x) === directionX &&
+            Math.abs(block.y - groblin.y) < block.height
+        );
+
+        if (blockInFront) {
+          groblin.velocity.y = -GROBLIN_MAX_SPEED;
+          groblin.velocity.x = 0;
+        } else {
+          groblin.velocity.x = GROBLIN_MAX_SPEED * directionX;
         }
       }
-      if (groblin.plan!.type === "eat") {
+
+      // move towards it, jumping over 1 block height if necessary
+      // if (groblin.landed && directionX !== 0) {
+      //   if (
+      //     Math.sign(groblin.velocity.x) !== directionX ||
+      //     Math.abs(groblin.velocity.x) < GROBLIN_MAX_SPEED
+      //   ) {
+      //     groblin.velocity.x = GROBLIN_MAX_SPEED * directionX;
+      //   }
+      //   // Check if there's a block in front of the groblin
+      //   const blockInFront = this.view.objects.block.some(
+      //     (block) =>
+      //       Math.abs(block.x - groblin.x) <= 2 &&
+      //       Math.sign(block.x - groblin.x) === directionX &&
+      //       Math.abs(block.y - groblin.y) < 0.5
+      //   );
+
+      //   if (blockInFront) {
+      //     groblin.velocity.y = -GROBLIN_MAX_SPEED;
+      //   }
+      // }
+    };
+
+    //
+
+    const collideWithBlock = (movable: Movable, block: Block) => {
+      if (
+        block.exposed.top &&
+        movable.velocity.y > 0 &&
+        movable.y + movable.height / 2 <= block.y - block.height / 2 + movable.velocity.y + 1e-5
+      ) {
+        movable.velocity.y = 0;
+        movable.y = block.y - block.height / 2 - movable.height / 2;
+        movable.landed = true;
+      } else if (
+        block.exposed.left &&
+        movable.velocity.x > 0 &&
+        movable.x + movable.width / 2 <= block.x - block.width / 2 + movable.velocity.x
+      ) {
+        movable.x = block.x - block.width / 2 - movable.width / 2 - movable.velocity.x;
+        movable.velocity.x *= -0.25;
+      } else if (
+        block.exposed.bottom &&
+        movable.velocity.y < 0 &&
+        movable.y - movable.height / 2 >= block.y + block.height / 2 + movable.velocity.y
+      ) {
+        movable.velocity.y *= -1;
+        movable.y = block.y + block.height / 2 + movable.height / 2;
+      } else if (
+        block.exposed.right &&
+        movable.velocity.x < 0 &&
+        movable.x - movable.width / 2 >= block.x + block.width / 2 + movable.velocity.x
+      ) {
+        movable.x = block.x + block.width / 2 + movable.width / 2 + movable.velocity.x;
+        movable.velocity.x *= -0.25;
+      }
+    };
+
+    if (!this.initialized) {
+      this.initialized = true;
+      this.checkExposure();
+    }
+
+    this.berryTimer -= delta;
+    if (this.berryTimer <= 0) {
+      this.berryTimer = BERRY_TIMER_MAX;
+      this.add<Edible>({
+        x: Math.random() * 50,
+        y: 0,
+        width: 1,
+        height: 1,
+        density: 1,
+        velocity: { x: 0, y: 0 },
+        landed: false,
+        food: 20,
+        group: 0,
+        collidesWith: new Set([0, 1]),
+        collidable: true,
+        movable: true,
+        edible: true
+      });
+    }
+
+    this.view.objects.movable.forEach(applyGravity);
+    // update groblins
+    this.view.objects.groblin.forEach((groblin) => {
+      groblinSetPlan(groblin);
+      if (groblin.plan && groblin.plan.type === "move") {
+        groblinMove(groblin, groblin.plan.to);
+      }
+      if (groblin.plan && groblin.plan.type === "eat") {
+        groblin.needs.food.add(groblin.plan.what.food);
         this.remove(groblin.plan.what);
       }
     });
-    this.view.objects.movable.forEach((movable) => {
-      movable.landed = false;
-    });
+    this.view.objects.movable.forEach((movable) => (movable.landed = false));
     // check for collisions among collidables and do something
     // TODO: filter out blocks that aren't exposed
     // TODO: 2d spatial partitioning
@@ -213,36 +309,7 @@ class World {
           [object2, object1]
         ].forEach(([o1, o2]) => {
           if (isInstance(o1, "movable") && isInstance(o2, "block")) {
-            if (
-              o2.exposed.top &&
-              o1.velocity.y > 0 &&
-              o1.y + o1.height / 2 <= o2.y - o2.height / 2 + o1.velocity.y
-            ) {
-              o1.velocity.y = 0;
-              o1.y = o2.y - o2.height / 2 - o1.height / 2;
-              o1.landed = true;
-            } else if (
-              o2.exposed.left &&
-              o1.velocity.x > 0 &&
-              o1.x + o1.width / 2 <= o2.x - o2.width / 2 + o1.velocity.x
-            ) {
-              o1.velocity.x = 0;
-              o1.x = o2.x - o2.width / 2 - o1.width / 2;
-            } else if (
-              o2.exposed.bottom &&
-              o1.velocity.y < 0 &&
-              o1.y - o1.height / 2 >= o2.y + o2.height / 2 + o1.velocity.y
-            ) {
-              o1.velocity.y = 0;
-              o1.y = o2.y + o2.height / 2 + o1.height / 2;
-            } else if (
-              o2.exposed.right &&
-              o1.velocity.x < 0 &&
-              o1.x - o1.width / 2 >= o2.x + o2.width / 2 + o1.velocity.x
-            ) {
-              o1.velocity.x = 0;
-              o1.x = o2.x + o2.width / 2 + o1.width / 2;
-            }
+            collideWithBlock(o1, o2);
           }
         });
       } else {
@@ -253,6 +320,9 @@ class World {
     this.view.objects.movable.forEach((movable) => {
       movable.x += movable.velocity.x;
       movable.y += movable.velocity.y;
+      if (movable.landed) {
+        movable.velocity.x = 0;
+      }
     });
   }
 }
@@ -261,7 +331,8 @@ class PixiWorld extends World {
   app: Application;
   blockSize: number;
   textures: { groblin: Texture; berry: Texture; block: Texture };
-  sprites: Map<WorldObject, Sprite> = new Map();
+  sprites: Map<WorldObject, ContainerChild> = new Map();
+  followFields: Map<WorldObject, BitmapText> = new Map();
 
   constructor(
     width: number,
@@ -279,8 +350,15 @@ class PixiWorld extends World {
   add<T extends WorldObject>(object: T): T {
     super.add(object);
     let texture: Texture | undefined = undefined;
+    let textStyle: TextStyleOptions | undefined = undefined;
     if (isInstance(object, "groblin")) {
       texture = this.textures.groblin;
+      textStyle = {
+        fontFamily: "Arial",
+        fontSize: 12,
+        fill: "white",
+        align: "center"
+      };
     }
     if (isInstance(object, "edible")) {
       texture = this.textures.berry;
@@ -296,6 +374,11 @@ class PixiWorld extends World {
         (this.blockSize * object.height) / texture.height);
       this.app.stage.addChild(sprite);
       this.sprites.set(object, sprite);
+    }
+    if (textStyle) {
+      const text = new BitmapText({ text: "foobar", style: textStyle });
+      this.app.stage.addChild(text);
+      this.followFields.set(object, text);
     }
     return object;
   }
@@ -314,6 +397,17 @@ class PixiWorld extends World {
     this.view.objects.all.forEach((object) => {
       this.sprites.get(object)!.x = object.x * this.blockSize;
       this.sprites.get(object)!.y = object.y * this.blockSize;
+      const text = this.followFields.get(object);
+      if (text) {
+        text.x = object.x * this.blockSize;
+        text.y = object.y * this.blockSize;
+        if (isInstance(object, "groblin")) {
+          const needs = (Object.entries(object.needs) as Entries<Groblin["needs"]>).map(
+            ([need, tracker]) => `${need}: ${Math.round(tracker.get())}\n`
+          );
+          text.text = `${object.name}\n${needs}\npriority: ${object.priority}\nplan: ${object.plan!.type}`;
+        }
+      }
     });
   }
 }

@@ -4,7 +4,7 @@ import type { WorldView } from "./world";
 type Plan =
   | {
       type: "move";
-      to: WorldObject;
+      to: { x: number; y: number };
     }
   | { type: "eat"; what: Edible }
   | {
@@ -62,6 +62,7 @@ class FoodTracker extends NeedTracker {
     full: number;
   };
   state: "full" | "hungry" | "starving" = "full";
+  exploreTo: { x: number; y: number } | null = null;
   constructor(
     initial: number,
     max: number,
@@ -106,14 +107,25 @@ class FoodTracker extends NeedTracker {
   }
 
   plan(planner: Groblin, view: WorldView) {
-    const food = view.objects.edible.length > 0 ? view.objects.edible[0] : null;
+    const food =
+      view.objects.edible.length > 0
+        ? view.objects.edible.sort(
+            (e1, e2) => Math.abs(e1.x - planner.x) - Math.abs(e2.x - planner.x)
+          )[0]
+        : undefined;
     if (food) {
+      this.exploreTo = null;
       if (view.collidingPairs.get(planner).has(food)) {
         return { type: "eat", what: food } as Plan;
       }
       return { type: "move", to: food } as Plan;
+    } else {
+      if (!this.exploreTo || Math.abs(this.exploreTo.x - planner.x) < 1) {
+        this.exploreTo = { x: planner.x + /*Math.sign(Math.random() - 0.5) */ -10, y: planner.y };
+      }
+      // There's no food in sight, so pick a random place at the edge of vision and move to it
+      return { type: "move", to: this.exploreTo } as Plan;
     }
-    return { type: "wait" } as Plan;
   }
 }
 
@@ -134,6 +146,7 @@ class RelaxTracker extends NeedTracker {
 type Groblin = WorldObject &
   Collidable &
   Movable & {
+    name: string;
     needs: { food: FoodTracker; relax: RelaxTracker };
     plan?: Plan;
     priority?: keyof Groblin["needs"];

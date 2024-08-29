@@ -23,33 +23,50 @@ async function createApp() {
   // Create a new Sprite from an image path.
   //   const bunny = new Sprite(texture);
 
-  const world = new PixiWorld(100, 100, app, 20, {
+  const width = 50;
+  const height = 30;
+
+  const world = new PixiWorld(width, height, app, 20, {
     groblin: await Assets.load(bunnyPng),
     berry: await Assets.load(cherryPng),
     block: await Assets.load(blockPng)
   });
 
-  const terrain = generateTerrain(50, 20);
+  const addBlock = (x: number, y: number) => {
+    world.add<Block>({
+      x,
+      y,
+      width: 1,
+      height: 1,
+      group: 1,
+      exposed: {
+        top: true,
+        bottom: true,
+        left: true,
+        right: true
+      },
+      collidesWith: new Set([0]),
+      collidable: true,
+      block: true
+    });
+  };
+
+  const terrain = generateTerrain(width, height);
   terrain.forEach(({ x, y }) => {
-    for (let i = 49; i > y; i--) {
-      world.add<Block>({
-        x,
-        y: i,
-        width: 1,
-        height: 1,
-        group: 1,
-        exposed: {
-          top: true,
-          bottom: true,
-          left: true,
-          right: true
-        },
-        collidesWith: new Set([0]),
-        collidable: true,
-        block: true
-      });
+    // const upTo = x === 11 ? y - 4 : y;
+    for (let i = height - 1; i > y; i--) {
+      addBlock(x, i);
     }
   });
+
+  for (let x = 0; x < width; x++) {
+    addBlock(x, height);
+    addBlock(x, 0);
+  }
+  for (let y = 0; y < height; y++) {
+    addBlock(width, y);
+    addBlock(0, y);
+  }
 
   world.add<Groblin>({
     x: 10,
@@ -67,6 +84,7 @@ async function createApp() {
       }),
       relax: new RelaxTracker(50, 100)
     },
+    name: "Greebus",
     group: 0,
     collidesWith: new Set([0, 1]),
     collidable: true,
@@ -82,7 +100,7 @@ async function createApp() {
     density: 1,
     velocity: { x: 0, y: 0 },
     landed: false,
-    food: 100,
+    food: 20,
     group: 0,
     collidesWith: new Set([0, 1]),
     collidable: true,

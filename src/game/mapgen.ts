@@ -4,7 +4,7 @@ type Coordinate = {
 };
 
 function generateTerrain(width: number, height: number, n_sines: number = 10): Coordinate[] {
-  const terrain = [...Array(width).keys()].map((i) => ({ x: i, y: height - 1 }));
+  const terrain = [...Array(width).keys()].map((i) => ({ x: i, y: height / 2 }));
   for (let i = 0; i < n_sines; i++) {
     const amplitude = Math.random() * height * 0.1;
     const frequency = Math.random() / 2;

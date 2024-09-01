@@ -1,10 +1,12 @@
 import type { WorldObject, Collidable, Movable, Edible } from "./objects";
 import type { WorldView } from "./world";
+import PF from "pathfinding";
 
 type Plan =
   | {
       type: "move";
       to: { x: number; y: number };
+      path: number[][];
     }
   | { type: "eat"; what: Edible }
   | {
@@ -62,7 +64,8 @@ class FoodTracker extends NeedTracker {
     full: number;
   };
   state: "full" | "hungry" | "starving" = "full";
-  exploreTo: { x: number; y: number } | null = null;
+  private _plan: Plan = { type: "wait" };
+  private _exploreDirection: 1 | -1 = -1;
   constructor(
     initial: number,
     max: number,
@@ -107,25 +110,93 @@ class FoodTracker extends NeedTracker {
   }
 
   plan(planner: Groblin, view: WorldView) {
-    const food =
+    const foods =
       view.objects.edible.length > 0
-        ? view.objects.edible.sort(
-            (e1, e2) => Math.abs(e1.x - planner.x) - Math.abs(e2.x - planner.x)
-          )[0]
+        ? view.objects.edible
+            .filter((food) => food.landed)
+            .sort((e1, e2) => Math.abs(e1.x - planner.x) - Math.abs(e2.x - planner.x))
         : undefined;
-    if (food) {
-      this.exploreTo = null;
-      if (view.collidingPairs.get(planner).has(food)) {
-        return { type: "eat", what: food } as Plan;
+    if (foods) {
+      for (const food of foods) {
+        if (view.collidingPairs.get(planner).has(food)) {
+          this._plan = { type: "eat", what: food };
+          return this._plan;
+        }
+        if (
+          this._plan.type === "move" &&
+          this._plan.to.x === food.x &&
+          this._plan.to.y === food.y
+        ) {
+          // TODO: reassess path feasibility?
+          let xDiff = this._plan.path[0][0] - planner.x;
+          let yDiff = this._plan.path[0][1] - planner.y;
+          if (Math.abs(xDiff) < 0.5 && Math.abs(yDiff) < 0.5) {
+            this._plan.path = this._plan.path.splice(1);
+          }
+          return this._plan;
+        } else {
+          const path = new PF.AStarFinder({
+            diagonalMovement: PF.DiagonalMovement.Always
+          }).findPath(
+            Math.round(planner.x),
+            Math.round(planner.y),
+            Math.round(food.x),
+            Math.round(food.y),
+            view.grid.clone()
+          );
+          if (path.length > 0) {
+            this._plan = {
+              type: "move",
+              to: food,
+              path
+            };
+            return this._plan;
+          }
+        }
       }
-      return { type: "move", to: food } as Plan;
-    } else {
-      if (!this.exploreTo || Math.abs(this.exploreTo.x - planner.x) < 1) {
-        this.exploreTo = { x: planner.x + /*Math.sign(Math.random() - 0.5) */ -10, y: planner.y };
-      }
-      // There's no food in sight, so pick a random place at the edge of vision and move to it
-      return { type: "move", to: this.exploreTo } as Plan;
     }
+    // There's no food. Explore.
+    // If not already exploring, pick a destination
+    if (
+      this._plan.type !== "move" ||
+      Math.sqrt((this._plan.to.x - planner.x) ** 2 + (this._plan.to.y - planner.y) ** 2) < 0.1
+    ) {
+      // is the spot in direction, one above, or one below open?
+      let choseNew = false;
+      [-1, 0, 1].forEach((dy) => {
+        if (
+          view.grid.isWalkableAt(
+            Math.round(planner.x + this._exploreDirection),
+            Math.round(planner.y + dy)
+          )
+        ) {
+          this._plan = {
+            type: "move",
+            to: {
+              x: Math.round(planner.x + this._exploreDirection),
+              y: Math.round(planner.y + dy)
+            },
+            path: [[Math.round(planner.x + this._exploreDirection), Math.round(planner.y + dy)]]
+          };
+          choseNew = true;
+        }
+      });
+      if (choseNew) {
+        return this._plan;
+      } else {
+        this._exploreDirection *= -1;
+      }
+    }
+    if (this._plan.type === "move" && this._plan.path.length > 0) {
+      let xDiff = this._plan.path[0][0] - planner.x;
+      let yDiff = this._plan.path[0][1] - planner.y;
+      if (Math.abs(xDiff) < 0.5 && Math.abs(yDiff) < 0.5) {
+        this._plan.path = this._plan.path.splice(1);
+      }
+      return this._plan;
+    }
+    this._plan = { type: "wait" };
+    return this._plan;
   }
 }
 

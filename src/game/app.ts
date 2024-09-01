@@ -54,16 +54,14 @@ async function createApp() {
   const terrain = generateTerrain(width, height);
   terrain.forEach(({ x, y }) => {
     // const upTo = x === 11 ? y - 4 : y;
-    for (let i = height - 1; i > y; i--) {
-      addBlock(x, i);
-    }
+    addBlock(x, y);
   });
 
-  for (let x = 0; x < width; x++) {
+  for (let x = 0; x <= width; x++) {
     addBlock(x, height);
     addBlock(x, 0);
   }
-  for (let y = 0; y < height; y++) {
+  for (let y = 0; y <= height; y++) {
     addBlock(width, y);
     addBlock(0, y);
   }
@@ -71,8 +69,8 @@ async function createApp() {
   world.add<Groblin>({
     x: 10,
     y: 0,
-    width: 0.75,
-    height: 0.75,
+    width: 0.9, // keep objects slightly narrower so they don't get stuck between blocks
+    height: 1,
     density: 1,
     velocity: { x: 0, y: 0 },
     landed: false,
@@ -93,10 +91,10 @@ async function createApp() {
   });
 
   world.add<Edible>({
-    x: 20,
+    x: 10,
     y: 0,
-    width: 1,
-    height: 1,
+    width: 0.9,
+    height: 0.9,
     density: 1,
     velocity: { x: 0, y: 0 },
     landed: false,

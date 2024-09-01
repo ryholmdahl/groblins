@@ -25,6 +25,7 @@
     "@electron-toolkit/utils": "^3.0.0",
     "@pixi/unsafe-eval": "^7.4.2",
     "electron-updater": "^6.1.7",
+    "pathfinding": "^0.4.18",
     "pixi.js": "^8.2.6"
   },
   "devDependencies": {
@@ -32,6 +33,7 @@
     "@electron-toolkit/eslint-config-ts": "^2.0.0",
     "@electron-toolkit/tsconfig": "^1.0.1",
     "@types/node": "^20.14.8",
+    "@types/pathfinding": "^0.0.9",
     "electron": "^31.0.2",
     "electron-builder": "^24.13.3",
     "electron-vite": "^2.3.0",

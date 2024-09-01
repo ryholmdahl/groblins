@@ -14,7 +14,7 @@ type Collidable = WorldObject & {
 type Movable = WorldObject & {
   density: number;
   velocity: { x: number; y: number };
-  landed: boolean;
+  landed: "bottom" | "top" | "left" | "right" | false;
   movable: true;
 };
 

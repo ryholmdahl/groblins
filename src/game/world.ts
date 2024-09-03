@@ -25,14 +25,14 @@ type Components = {
   block: Block;
 };
 
-const GROBLIN_MAX_SPEED = 0.07;
-const TERMINAL_VELOCITY = 1;
+const GROBLIN_MAX_SPEED = 3;
+const TERMINAL_VELOCITY = 100;
 const BERRY_TIMER_MAX = 2;
 const GROBLIN_VISION = 1;
-const GRAVITY = 3;
-const JUMP_POP = 0.35;
+const GRAVITY = 100;
+const JUMP_POP = 15;
 const WALL_ELASTICITY = 0.1;
-const DRAG = 0.2;
+const DRAG = 3;
 
 function isInstance<T extends keyof Components>(
   object: Components[T] | WorldObject,
@@ -188,93 +188,6 @@ class World {
   }
 
   tick(delta: number): void {
-    const applyGravity = (movable: Movable) => {
-      {
-        if (!movable.landed && movable.velocity.y < TERMINAL_VELOCITY) {
-          movable.velocity.y += delta * GRAVITY;
-        }
-      }
-    };
-
-    const groblinSetPlan = (groblin: Groblin) => {
-      Object.entries(groblin.needs).forEach(([need, tracker]) => {
-        tracker.tick(delta);
-        if (!groblin.priority || tracker.urgency() > groblin.needs[groblin.priority].urgency()) {
-          groblin.priority = need as Groblin["priority"];
-        }
-      });
-      groblin.plan = groblin.needs[groblin.priority!].plan(
-        groblin,
-        this.getView(groblin, GROBLIN_VISION)
-      );
-    };
-
-    // is the spot to your left or right? need to land bottom or top
-    // is the spot above or below? need to land right or left
-
-    const groblinMove = (
-      groblin: Groblin,
-      plan: { to: { x: number; y: number }; path: number[][] }
-    ) => {
-      if (plan.path.length > 0) {
-        let xDiff = plan.path[0][0] - groblin.x;
-        let yDiff = plan.path[0][1] - groblin.y;
-        if (
-          ((xDiff > 0 && groblin.velocity.x < GROBLIN_MAX_SPEED) ||
-            (xDiff < 0 && groblin.velocity.x > -GROBLIN_MAX_SPEED)) &&
-          groblin.velocity.y <= 0
-        ) {
-          groblin.velocity.x = GROBLIN_MAX_SPEED * Math.sign(xDiff);
-        }
-        if (yDiff < -0.5 && groblin.landed === "bottom") {
-          groblin.velocity.y = -JUMP_POP;
-        }
-      }
-    };
-
-    const collideWithBlock = (movable: Movable, block: Block) => {
-      if (
-        block.exposed.left &&
-        movable.velocity.x >= 0 &&
-        movable.x + movable.width / 2 <= block.x - block.width / 2 + movable.velocity.x
-      ) {
-        movable.x = block.x - block.width / 2 - movable.width / 2; // - movable.velocity.x;
-        // movable.velocity.x *= -0.25;
-        movable.velocity.x *= -WALL_ELASTICITY;
-        movable.landed = "right";
-      } else if (
-        block.exposed.right &&
-        movable.velocity.x <= 0 &&
-        movable.x - movable.width / 2 >= block.x + block.width / 2 + movable.velocity.x
-      ) {
-        movable.velocity.x *= -WALL_ELASTICITY;
-        movable.landed = "left";
-        movable.x = block.x + block.width / 2 + movable.width / 2; //+ movable.velocity.x;
-        // movable.velocity.x *= -0.25;
-      } else if (
-        block.exposed.top &&
-        movable.velocity.y >= 0 &&
-        movable.y + movable.height / 2 <= block.y - block.height / 2 + movable.velocity.y
-      ) {
-        movable.velocity.y = 0;
-        movable.velocity.x -= DRAG * delta * Math.sign(movable.velocity.x);
-        if (Math.abs(movable.velocity.x) < DRAG * delta) {
-          movable.velocity.x = 0;
-        }
-        movable.y = block.y - block.height / 2 - movable.height / 2;
-        movable.landed = "bottom";
-      } else if (
-        block.exposed.bottom &&
-        movable.velocity.y <= 0 &&
-        movable.y - movable.height / 2 >= block.y + block.height / 2 + movable.velocity.y
-      ) {
-        // movable.velocity.y *= -1;
-        movable.velocity.y *= -WALL_ELASTICITY;
-        movable.landed = "top";
-        movable.y = block.y + block.height / 2 + movable.height / 2;
-      }
-    };
-
     if (!this.initialized) {
       this.initialized = true;
       this.checkExposure();
@@ -300,8 +213,46 @@ class World {
       });
     }
 
+    const applyGravity = (movable: Movable) => {
+      {
+        if (!movable.landed && movable.velocity.y < TERMINAL_VELOCITY) {
+          movable.velocity.y += delta * GRAVITY * movable.density;
+        }
+      }
+    };
     this.view.objects.movable.forEach(applyGravity);
-    // update groblins
+
+    const groblinSetPlan = (groblin: Groblin) => {
+      Object.entries(groblin.needs).forEach(([need, tracker]) => {
+        tracker.tick(delta);
+        if (!groblin.priority || tracker.urgency() > groblin.needs[groblin.priority].urgency()) {
+          groblin.priority = need as Groblin["priority"];
+        }
+      });
+      groblin.plan = groblin.needs[groblin.priority!].plan(
+        groblin,
+        this.getView(groblin, GROBLIN_VISION)
+      );
+    };
+    const groblinMove = (
+      groblin: Groblin,
+      plan: { to: { x: number; y: number }; path: number[][] }
+    ) => {
+      if (plan.path.length > 0) {
+        let xDiff = plan.path[0][0] - groblin.x;
+        let yDiff = plan.path[0][1] - groblin.y;
+        if (
+          ((xDiff > 0 && groblin.velocity.x < GROBLIN_MAX_SPEED) ||
+            (xDiff < 0 && groblin.velocity.x > -GROBLIN_MAX_SPEED)) &&
+          groblin.velocity.y <= 0
+        ) {
+          groblin.velocity.x = GROBLIN_MAX_SPEED * Math.sign(xDiff);
+        }
+        if (yDiff < -0.5 && groblin.landed === "bottom") {
+          groblin.velocity.y = -JUMP_POP;
+        }
+      }
+    };
     this.view.objects.groblin.forEach((groblin) => {
       groblinSetPlan(groblin);
       if (groblin.plan && groblin.plan.type === "move") {
@@ -320,6 +271,51 @@ class World {
     // check for collisions among collidables and do something
     // TODO: filter out blocks that aren't exposed
     // TODO: 2d spatial partitioning
+    const collideWithBlock = (movable: Movable, block: Block) => {
+      const dx = movable.x - block.x;
+      const dy = movable.y - block.y;
+      const combinedHalfWidth = (movable.width + block.width) / 2;
+      const combinedHalfHeight = (movable.height + block.height) / 2;
+
+      const overlapX = combinedHalfWidth - Math.abs(dx);
+      const overlapY = combinedHalfHeight - Math.abs(dy);
+
+      if (overlapX >= overlapY) {
+        if (dy > 0) {
+          // Collision on the bottom side of the block
+          movable.landed = "top";
+          movable.velocity.y *= Math.max(movable.velocity.y, movable.velocity.y * -WALL_ELASTICITY);
+          movable.y = Math.max(movable.y, block.y + block.height / 2 + movable.height / 2);
+        } else {
+          // Collision on the top side of the block
+          movable.landed = "bottom";
+          movable.velocity.y = Math.min(0, movable.velocity.y);
+          movable.velocity.x -= DRAG * delta * Math.sign(movable.velocity.x);
+          if (Math.abs(movable.velocity.x) < DRAG * delta) {
+            movable.velocity.x = 0;
+          }
+          movable.y = Math.min(movable.y, block.y - block.height / 2 - movable.height / 2);
+        }
+      } else {
+        if (dx > 0) {
+          // Collision on the right side of the block
+          movable.landed = "left";
+          movable.velocity.x = Math.max(movable.velocity.x, movable.velocity.x * -WALL_ELASTICITY);
+          movable.x = Math.max(
+            movable.x,
+            block.x + block.width / 2 + movable.width / 2 + movable.velocity.x * delta
+          );
+        } else {
+          // Collision on the left side of the block
+          movable.landed = "right";
+          movable.velocity.x = Math.min(movable.velocity.x, movable.velocity.x * -WALL_ELASTICITY);
+          movable.x = Math.min(
+            movable.x,
+            block.x - block.width / 2 - movable.width / 2 + movable.velocity.x * delta
+          );
+        }
+      }
+    };
     this.collidablePairs.forEach(([object1, object2]) => {
       if (
         Math.abs(object1.x - object2.x) <= (object1.width + object2.width) / 2 + 1e-5 &&
@@ -342,8 +338,8 @@ class World {
       }
     });
     this.view.objects.movable.forEach((movable) => {
-      movable.x += movable.velocity.x;
-      movable.y += movable.velocity.y;
+      movable.x += movable.velocity.x * delta;
+      movable.y += movable.velocity.y * delta;
     });
   }
 }

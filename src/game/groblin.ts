@@ -57,6 +57,30 @@ abstract class NeedTracker {
   abstract plan(planner: Groblin, view: WorldView): Plan;
 }
 
+function route(planner: Groblin, to: { x: number; y: number }, grid: PF.Grid) {
+  return new PF.AStarFinder({
+    diagonalMovement: PF.DiagonalMovement.Always
+  }).findPath(
+    Math.round(planner.x),
+    Math.round(planner.y),
+    Math.round(to.x),
+    Math.round(to.y),
+    grid.clone()
+  );
+}
+
+function follow(planner: Groblin, plan: Plan & { type: "move" }) {
+  let xDiff = plan.path[0][0] - planner.x;
+  let yDiff = plan.path[0][1] - planner.y;
+  if (Math.abs(xDiff) < 0.5 && Math.abs(yDiff) < 0.5) {
+    plan = {
+      ...plan,
+      path: [...plan.path].splice(1)
+    };
+  }
+  return plan;
+}
+
 class FoodTracker extends NeedTracker {
   thresholds: {
     starving: number;
@@ -115,84 +139,59 @@ class FoodTracker extends NeedTracker {
         ? view.objects.edible
             .filter((food) => food.landed)
             .sort((e1, e2) => Math.abs(e1.x - planner.x) - Math.abs(e2.x - planner.x))
-        : undefined;
-    if (foods) {
-      for (const food of foods) {
-        if (view.collidingPairs.get(planner).has(food)) {
-          this._plan = { type: "eat", what: food };
-          return this._plan;
-        }
-        if (
-          this._plan.type === "move" &&
-          this._plan.to.x === food.x &&
-          this._plan.to.y === food.y
-        ) {
-          // TODO: reassess path feasibility?
-          let xDiff = this._plan.path[0][0] - planner.x;
-          let yDiff = this._plan.path[0][1] - planner.y;
-          if (Math.abs(xDiff) < 0.5 && Math.abs(yDiff) < 0.5) {
-            this._plan.path = this._plan.path.splice(1);
-          }
-          return this._plan;
-        } else {
-          const path = new PF.AStarFinder({
-            diagonalMovement: PF.DiagonalMovement.Always
-          }).findPath(
-            Math.round(planner.x),
-            Math.round(planner.y),
-            Math.round(food.x),
-            Math.round(food.y),
-            view.grid.clone()
-          );
-          if (path.length > 0) {
-            this._plan = {
-              type: "move",
-              to: food,
-              path
-            };
-            return this._plan;
-          }
-        }
+        : [];
+    for (const food of foods) {
+      // If touching a food, eat it
+      if (view.collidingPairs.get(planner).has(food)) {
+        this._plan = { type: "eat", what: food };
+        return this._plan;
+      }
+      // If already planning to get a food, keep at it
+      if (this._plan.type === "move" && this._plan.to.x === food.x && this._plan.to.y === food.y) {
+        // TODO: reassess path feasibility?
+        this._plan = follow(planner, this._plan);
+        return this._plan;
+      }
+      // Try to get to the food
+      const path = route(planner, food, view.grid);
+      if (path.length > 0) {
+        this._plan = {
+          type: "move",
+          to: food,
+          path
+        };
+        return this._plan;
       }
     }
     // There's no food. Explore.
     // If not already exploring, pick a destination
     if (
       this._plan.type !== "move" ||
-      Math.sqrt((this._plan.to.x - planner.x) ** 2 + (this._plan.to.y - planner.y) ** 2) < 0.1
+      Math.sqrt((this._plan.to.x - planner.x) ** 2 + (this._plan.to.y - planner.y) ** 2) < 0.5
     ) {
       // is the spot in direction, one above, or one below open?
-      let choseNew = false;
-      [-1, 0, 1].forEach((dy) => {
-        if (
-          view.grid.isWalkableAt(
-            Math.round(planner.x + this._exploreDirection),
-            Math.round(planner.y + dy)
-          )
-        ) {
+      // x = 0.9, exploreDirection = 1
+      // target gets set to [1, *], plan gets returned
+      for (let dy of [-1, 0, 1]) {
+        const target = {
+          x:
+            this._exploreDirection +
+            (this._exploreDirection === 1 ? Math.floor(planner.x) : Math.ceil(planner.x)),
+          y: Math.round(planner.y + dy)
+        };
+        if (view.grid.isWalkableAt(target.x, target.y)) {
           this._plan = {
             type: "move",
-            to: {
-              x: Math.round(planner.x + this._exploreDirection),
-              y: Math.round(planner.y + dy)
-            },
-            path: [[Math.round(planner.x + this._exploreDirection), Math.round(planner.y + dy)]]
+            to: target,
+            path: [[target.x, target.y]]
           };
-          choseNew = true;
+          return this._plan;
         }
-      });
-      if (choseNew) {
-        return this._plan;
-      } else {
-        this._exploreDirection *= -1;
       }
+      this._exploreDirection *= -1;
     }
     if (this._plan.type === "move" && this._plan.path.length > 0) {
-      let xDiff = this._plan.path[0][0] - planner.x;
-      let yDiff = this._plan.path[0][1] - planner.y;
-      if (Math.abs(xDiff) < 0.5 && Math.abs(yDiff) < 0.5) {
-        this._plan.path = this._plan.path.splice(1);
-      }
+      this._plan = follow(planner, this._plan);
       return this._plan;
     }
     this._plan = { type: "wait" };

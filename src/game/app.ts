@@ -68,7 +68,7 @@ async function createApp() {
 
   world.add<Groblin>({
     x: 10,
-    y: 0,
+    y: 5,
     width: 0.9, // keep objects slightly narrower so they don't get stuck between blocks
     height: 1,
     density: 1,
@@ -92,7 +92,7 @@ async function createApp() {
 
   world.add<Edible>({
     x: 10,
-    y: 0,
+    y: 5,
     width: 0.9,
     height: 0.9,
     density: 1,

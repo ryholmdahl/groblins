@@ -5,7 +5,7 @@ import blockPng from "../../resources/icon.png";
 import { PixiWorld } from "./world";
 import { FoodTracker, RelaxTracker } from "./groblin";
 import type { Groblin } from "./groblin";
-import type { Edible, Block } from "./objects";
+import type { Edible, Block, Cave } from "./objects";
 import { generateTerrain } from "./mapgen";
 
 async function createApp() {
@@ -29,7 +29,8 @@ async function createApp() {
   const world = new PixiWorld(width, height, app, 20, {
     groblin: await Assets.load(bunnyPng),
     berry: await Assets.load(cherryPng),
-    block: await Assets.load(blockPng)
+    block: await Assets.load(blockPng),
+    cave: await Assets.load(cherryPng)
   });
 
   const addBlock = (x: number, y: number) => {
@@ -51,10 +52,27 @@ async function createApp() {
     });
   };
 
+  const addCave = (x: number, y: number) => {
+    world.add<Cave>({
+      x,
+      y,
+      width: 1,
+      height: 1,
+      group: 1,
+      collidesWith: new Set([0]),
+      collidable: true,
+      cave: true
+    });
+  };
+
   const terrain = generateTerrain(width, height);
-  terrain.forEach(({ x, y }) => {
+  terrain.forEach(({ x, y, cave }) => {
     // const upTo = x === 11 ? y - 4 : y;
-    addBlock(x, y);
+    if (cave) {
+      addCave(x, y);
+    } else {
+      addBlock(x, y);
+    }
   });
 
   for (let x = 0; x <= width; x++) {
@@ -73,7 +91,8 @@ async function createApp() {
     height: 1,
     density: 1,
     velocity: { x: 0, y: 0 },
-    landed: false,
+    landed: null,
+    crawling: null,
     needs: {
       food: new FoodTracker(50, 100, {
         starving: 10,
@@ -97,7 +116,7 @@ async function createApp() {
     height: 0.9,
     density: 1,
     velocity: { x: 0, y: 0 },
-    landed: false,
+    landed: null,
     food: 20,
     group: 0,
     collidesWith: new Set([0, 1]),
@@ -106,6 +125,7 @@ async function createApp() {
     edible: true
   });
 
+  app.canvas.addEventListener("pointerdown", (event) => world.pointerDown(event.x, event.y));
   // Add an animation loop callback to the application's ticker.
   app.ticker.add((time) => {
     world.tick(time.deltaMS / 1000);

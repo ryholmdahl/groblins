@@ -14,7 +14,7 @@ type Collidable = WorldObject & {
 type Movable = WorldObject & {
   density: number;
   velocity: { x: number; y: number };
-  landed: "bottom" | "top" | "left" | "right" | false;
+  landed: Block | null;
   movable: true;
 };
 
@@ -34,7 +34,14 @@ type Block = WorldObject &
       top: boolean;
       bottom: boolean;
     };
+    collidesWith: Set<0>;
     block: true;
   };
 
-export type { WorldObject, Collidable, Movable, Edible, Block };
+type Cave = Collidable & {
+  group: 1;
+  collidesWith: Set<0>;
+  cave: true;
+};
+
+export type { WorldObject, Collidable, Movable, Edible, Block, Cave };

@@ -1,21 +1,9 @@
-import type { Application, ContainerChild, TextStyle, TextStyleOptions, Texture } from "pixi.js";
+import type { Application, ContainerChild, TextStyleOptions, Texture } from "pixi.js";
 import { Sprite, BitmapText } from "pixi.js";
 import { Groblin } from "./groblin";
-import type { WorldObject, Collidable, Edible, Movable, Block } from "./objects";
+import type { WorldObject, Collidable, Edible, Movable, Block, Cave } from "./objects";
 import type { Entries } from "type-fest";
 import PF from "pathfinding";
-
-// what checks for collisions? and what determines what happens?
-// "dumb world": world is basically just a container for objects. the objects handle things themselves.
-// "smart world": world checks for all interactions and determines the outcomes
-// "midwit world": world checks for interactions but lets the objects determine the outcomes
-// let's try dumb world!
-
-// simplest approach: at each timestep, recalculate what the groblin can see by iterating over all entities
-// this is wasteful, because what a groblin sees can only change as it moves or other things move
-// option 1: each groblin maintains a
-
-// each object has a "perception set" of positions
 
 type Components = {
   groblin: Groblin;
@@ -23,6 +11,7 @@ type Components = {
   movable: Movable;
   edible: Edible;
   block: Block;
+  cave: Cave;
 };
 
 const GROBLIN_MAX_SPEED = 3;
@@ -39,6 +28,16 @@ function isInstance<T extends keyof Components>(
   type: T
 ): object is Components[T] {
   return (<Components[T]>object)[type as keyof Components] !== undefined;
+}
+
+function collision(
+  object1: { x: number; y: number; width: number; height: number },
+  object2: { x: number; y: number; width: number; height: number }
+) {
+  return (
+    Math.abs(object1.x - object2.x) <= (object1.width + object2.width) / 2 &&
+    Math.abs(object1.y - object2.y) <= (object1.height + object2.height) / 2
+  );
 }
 
 class SetMap<K, T> extends Map<K, Set<T>> {
@@ -75,7 +74,7 @@ class World {
   width: number;
   height: number;
   view: WorldView = {
-    objects: { all: [], groblin: [], collidable: [], movable: [], edible: [], block: [] },
+    objects: { all: [], groblin: [], collidable: [], movable: [], edible: [], block: [], cave: [] },
     collidingPairs: new SetMap(),
     grid: new PF.Grid(1, 1)
   };
@@ -131,6 +130,51 @@ class World {
     }
   }
 
+  pointerDown(x: number, y: number) {
+    const proposed = { x: Math.round(x), y: Math.round(y), width: 0.99, height: 0.99 };
+    const existingBlock = this.view.objects.block.find(
+      (block) => block.x === proposed.x && block.y === proposed.y
+    );
+
+    if (existingBlock) {
+      // Remove the existing block
+      this.remove(existingBlock);
+      // Create a Cave in its place
+      this.add<Cave>({
+        x: proposed.x,
+        y: proposed.y,
+        width: 1,
+        height: 1,
+        group: 1,
+        collidesWith: new Set([0]),
+        collidable: true,
+        cave: true
+      });
+    } else {
+      // Add a new block if there isn't one already
+      if (!this.view.objects.collidable.some((collidable) => collision(collidable, proposed))) {
+        this.add<Block>({
+          x: proposed.x,
+          y: proposed.y,
+          width: 1,
+          height: 1,
+          group: 1,
+          exposed: {
+            top: true,
+            bottom: true,
+            left: true,
+            right: true
+          },
+          collidesWith: new Set([0]),
+          collidable: true,
+          block: true
+        });
+      }
+    }
+
+    this.checkExposure();
+  }
+
   // TODO: better caching
   private getView(object: WorldObject, range: number = 10): WorldView {
     const visible = new Set<WorldObject>();
@@ -170,20 +214,30 @@ class World {
       block.exposed.bottom = !this.view.objects.block.some(
         (other) => other.y === block.y + 1 && other.x === block.x
       );
-      for (let x = 0; x <= 0; x++) {
-        for (let y = -1; y <= -1; y++) {
-          if (
-            block.x + x >= 0 &&
-            block.x + x <= this.width &&
-            block.y + y >= 0 &&
-            block.y + y <= this.height
-          )
-            this.view.grid.setWalkableAt(block.x + x, block.y + y, true);
-        }
+      if (block.y - 1 >= 0) {
+        this.view.grid.setWalkableAt(block.x, block.y - 1, true);
       }
+      if (
+        block.y - 2 >= 0 &&
+        this.view.objects.block.some(
+          (other) => other.y === block.y - 1 && Math.abs(block.x - other.x) === 1
+        )
+      ) {
+        this.view.grid.setWalkableAt(block.x, block.y - 2, true);
+      }
+    });
+    this.view.objects.cave.forEach((cave: Cave) => {
+      this.view.grid.setWalkableAt(cave.x, cave.y, true);
+      this.view.grid.setWalkableAt(cave.x, cave.y - 1, true);
     });
     this.view.objects.block.forEach((block: Block) => {
       this.view.grid.setWalkableAt(block.x, block.y, false);
+    });
+    this.view.objects.groblin.forEach((groblin: Groblin) => {
+      if (groblin.plan?.type === "move") {
+        // force the groblin to reassess its path
+        groblin.needs[groblin.priority!].clear();
+      }
     });
   }
 
@@ -203,7 +257,7 @@ class World {
         height: 0.9,
         density: 1,
         velocity: { x: 0, y: 0 },
-        landed: false,
+        landed: null,
         food: 20,
         group: 0,
         collidesWith: new Set([0, 1]),
@@ -214,8 +268,13 @@ class World {
     }
 
     const applyGravity = (movable: Movable) => {
-      {
-        if (!movable.landed && movable.velocity.y < TERMINAL_VELOCITY) {
+      if (
+        !movable.landed &&
+        movable.velocity.y < TERMINAL_VELOCITY &&
+        (!isInstance(movable, "groblin") || movable.crawling === null)
+      ) {
+        // Check if the movable is a groblin and is in a cave
+        {
           movable.velocity.y += delta * GRAVITY * movable.density;
         }
       }
@@ -225,8 +284,13 @@ class World {
     const groblinSetPlan = (groblin: Groblin) => {
       Object.entries(groblin.needs).forEach(([need, tracker]) => {
         tracker.tick(delta);
-        if (!groblin.priority || tracker.urgency() > groblin.needs[groblin.priority].urgency()) {
+        if (
+          !groblin.priority ||
+          (need !== groblin.priority &&
+            tracker.urgency() > groblin.needs[groblin.priority].urgency())
+        ) {
           groblin.priority = need as Groblin["priority"];
+          groblin.needs[groblin.priority!].clear();
         }
       });
       groblin.plan = groblin.needs[groblin.priority!].plan(
@@ -244,11 +308,20 @@ class World {
         if (
           ((xDiff > 0 && groblin.velocity.x < GROBLIN_MAX_SPEED) ||
             (xDiff < 0 && groblin.velocity.x > -GROBLIN_MAX_SPEED)) &&
-          groblin.velocity.y <= 0
+          (groblin.velocity.y <= 0 || groblin.crawling !== null)
         ) {
           groblin.velocity.x = GROBLIN_MAX_SPEED * Math.sign(xDiff);
         }
-        if (yDiff < -0.5 && groblin.landed === "bottom") {
+        // Allow vertical movement in caves
+        if (groblin.crawling !== null) {
+          if (yDiff > 0 && groblin.velocity.y < GROBLIN_MAX_SPEED) {
+            groblin.velocity.y = GROBLIN_MAX_SPEED;
+          } else if (yDiff < 0 && groblin.velocity.y > -GROBLIN_MAX_SPEED) {
+            groblin.velocity.y = -GROBLIN_MAX_SPEED;
+          } else {
+            groblin.velocity.y = 0;
+          }
+        } else if (yDiff < -0.5 && groblin.landed !== null) {
           groblin.velocity.y = -JUMP_POP;
         }
       }
@@ -266,9 +339,9 @@ class World {
         groblin.needs.food.add(groblin.plan.what.food);
         this.remove(groblin.plan.what);
       }
+      groblin.crawling = null;
     });
-    this.view.objects.movable.forEach((movable) => (movable.landed = false));
-    // check for collisions among collidables and do something
+    this.view.objects.movable.forEach((movable) => (movable.landed = null));
     // TODO: filter out blocks that aren't exposed
     // TODO: 2d spatial partitioning
     const collideWithBlock = (movable: Movable, block: Block) => {
@@ -283,12 +356,11 @@ class World {
       if (overlapX >= overlapY) {
         if (dy > 0) {
           // Collision on the bottom side of the block
-          movable.landed = "top";
           movable.velocity.y *= Math.max(movable.velocity.y, movable.velocity.y * -WALL_ELASTICITY);
           movable.y = Math.max(movable.y, block.y + block.height / 2 + movable.height / 2);
         } else {
           // Collision on the top side of the block
-          movable.landed = "bottom";
+          movable.landed = block;
           movable.velocity.y = Math.min(0, movable.velocity.y);
           movable.velocity.x -= DRAG * delta * Math.sign(movable.velocity.x);
           if (Math.abs(movable.velocity.x) < DRAG * delta) {
@@ -299,7 +371,6 @@ class World {
       } else {
         if (dx > 0) {
           // Collision on the right side of the block
-          movable.landed = "left";
           movable.velocity.x = Math.max(movable.velocity.x, movable.velocity.x * -WALL_ELASTICITY);
           movable.x = Math.max(
             movable.x,
@@ -307,7 +378,6 @@ class World {
           );
         } else {
           // Collision on the left side of the block
-          movable.landed = "right";
           movable.velocity.x = Math.min(movable.velocity.x, movable.velocity.x * -WALL_ELASTICITY);
           movable.x = Math.min(
             movable.x,
@@ -317,10 +387,7 @@ class World {
       }
     };
     this.collidablePairs.forEach(([object1, object2]) => {
-      if (
-        Math.abs(object1.x - object2.x) <= (object1.width + object2.width) / 2 + 1e-5 &&
-        Math.abs(object1.y - object2.y) <= (object1.height + object2.height) / 2 + 1e-5
-      ) {
+      if (collision(object1, object2)) {
         // Involuntary interactions go here
         this.view.collidingPairs.add(object1, object2);
         this.view.collidingPairs.add(object2, object1);
@@ -328,8 +395,15 @@ class World {
           [object1, object2],
           [object2, object1]
         ].forEach(([o1, o2]) => {
-          if (isInstance(o1, "movable") && isInstance(o2, "block")) {
+          if (
+            isInstance(o1, "movable") &&
+            isInstance(o2, "block") &&
+            Object.entries(o2.exposed).some(([_, exposed]) => exposed)
+          ) {
             collideWithBlock(o1, o2);
+          }
+          if (isInstance(o1, "groblin") && isInstance(o2, "cave")) {
+            o1.crawling = o2;
           }
         });
       } else {
@@ -347,7 +421,7 @@ class World {
 class PixiWorld extends World {
   app: Application;
   blockSize: number;
-  textures: { groblin: Texture; berry: Texture; block: Texture };
+  textures: { groblin: Texture; berry: Texture; block: Texture; cave: Texture };
   sprites: Map<WorldObject, ContainerChild> = new Map();
   followFields: Map<WorldObject, BitmapText> = new Map();
   pathSprites: Sprite[] = [];
@@ -390,6 +464,9 @@ class PixiWorld extends World {
     if (isInstance(object, "block")) {
       texture = this.textures.block;
     }
+    if (isInstance(object, "cave")) {
+      texture = this.textures.cave;
+    }
     if (texture) {
       const sprite = new Sprite(texture);
       sprite.anchor.set(0.5);
@@ -418,6 +495,10 @@ class PixiWorld extends World {
       this.app.stage.removeChild(text);
     }
     this.sprites.delete(object);
+  }
+
+  pointerDown(x: number, y: number) {
+    return super.pointerDown(x / this.blockSize, y / this.blockSize);
   }
 
   tick(delta: number) {
@@ -452,10 +533,10 @@ class PixiWorld extends World {
           const needs = (Object.entries(object.needs) as Entries<Groblin["needs"]>).map(
             ([need, tracker]) => `${need}: ${Math.round(tracker.get())}\n`
           );
-          text.text = `${object.name}\n${needs}\npriority: ${object.priority}\nplan: ${object.plan!.type}\nlanded: ${object.landed}`;
+          text.text = `${object.name}\n${needs}\npriority: ${object.priority}\nplan: ${object.plan!.type}\nlanded: ${object.landed ? "yes" : "no"}`;
         }
         if (isInstance(object, "edible")) {
-          text.text = object.landed;
+          text.text = object.landed ? "landed" : "floating";
         }
       }
     });

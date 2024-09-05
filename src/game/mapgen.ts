@@ -6,6 +6,7 @@ function generateTerrain(
 ): {
   x: number;
   y: number;
+  cave: boolean;
 }[] {
   const peaks = [...Array(width).keys()].map((i) => ({ x: i, y: height / 2 }));
   for (let i = 0; i < n_sines; i++) {
@@ -58,12 +59,20 @@ function generateTerrain(
     terrain = newTerrain;
   }
 
-  return [...terrain.entries()]
-    .filter(([_, alive]) => alive)
-    .map(([position]) => {
-      const [x, y] = position.split(",").map(Number);
-      return { x, y };
-    });
+  const result: { x: number; y: number; cave: boolean }[] = [];
+  for (let x = 0; x < width; x++) {
+    const peakY = Math.floor(peaks[x].y);
+    for (let y = peakY; y < height; y++) {
+      const isTerrain = terrain.has(`${x},${y}`);
+      if (isTerrain) {
+        result.push({ x, y, cave: false });
+      } else {
+        result.push({ x, y, cave: true });
+      }
+    }
+  }
+
+  return result;
 }
 
 export { generateTerrain };

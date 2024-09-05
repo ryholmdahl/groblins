@@ -1,6 +1,8 @@
-import type { WorldObject, Collidable, Movable, Edible } from "./objects";
+import type { WorldObject, Collidable, Movable, Edible, Cave } from "./objects";
 import type { WorldView } from "./world";
 import PF from "pathfinding";
+
+const EXPLORE_VERTICAL_RANGE = 2;
 
 type Plan =
   | {
@@ -55,11 +57,13 @@ abstract class NeedTracker {
   tick(delta: number) {}
 
   abstract plan(planner: Groblin, view: WorldView): Plan;
+
+  abstract clear(): void;
 }
 
 function route(planner: Groblin, to: { x: number; y: number }, grid: PF.Grid) {
   return new PF.AStarFinder({
-    diagonalMovement: PF.DiagonalMovement.Always
+    diagonalMovement: PF.DiagonalMovement.Never
   }).findPath(
     Math.round(planner.x),
     Math.round(planner.y),
@@ -89,7 +93,7 @@ class FoodTracker extends NeedTracker {
   };
   state: "full" | "hungry" | "starving" = "full";
   private _plan: Plan = { type: "wait" };
-  private _exploreDirection: 1 | -1 = -1;
+  private _exploreDirection: { x: 1 | -1; y: 1 | -1 } = { x: -1, y: 1 };
   constructor(
     initial: number,
     max: number,
@@ -133,11 +137,15 @@ class FoodTracker extends NeedTracker {
     this.add(-delta * 10);
   }
 
+  clear() {
+    this._plan = { type: "wait" };
+  }
+
   plan(planner: Groblin, view: WorldView) {
     const foods =
       view.objects.edible.length > 0
         ? view.objects.edible
-            .filter((food) => food.landed)
+            .filter((food) => food.landed !== null)
             .sort((e1, e2) => Math.abs(e1.x - planner.x) - Math.abs(e2.x - planner.x))
         : [];
     for (const food of foods) {
@@ -166,29 +174,35 @@ class FoodTracker extends NeedTracker {
     // There's no food. Explore.
     // If not already exploring, pick a destination
     if (
-      this._plan.type !== "move" ||
-      Math.sqrt((this._plan.to.x - planner.x) ** 2 + (this._plan.to.y - planner.y) ** 2) < 0.5
+      (planner.landed || planner.crawling) &&
+      (this._plan.type !== "move" ||
+        Math.sqrt((this._plan.to.x - planner.x) ** 2 + (this._plan.to.y - planner.y) ** 2) < 0.5)
     ) {
-      // is the spot in direction, one above, or one below open?
-      // x = 0.9, exploreDirection = 1
-      // target gets set to [1, *], plan gets returned
-      for (let dy of [-1, 0, 1]) {
+      const restingOn = planner.landed
+        ? { x: planner.landed.x, y: planner.landed.y - 1 }
+        : { x: planner.crawling!.x, y: planner.crawling!.y };
+      for (let dy of [
+        0,
+        ...Array.from(
+          { length: EXPLORE_VERTICAL_RANGE * 2 + 1 },
+          (_, i) => i - EXPLORE_VERTICAL_RANGE
+        ).filter((v) => v !== 0)
+      ]) {
         const target = {
-          x:
-            this._exploreDirection +
-            (this._exploreDirection === 1 ? Math.floor(planner.x) : Math.ceil(planner.x)),
-          y: Math.round(planner.y + dy)
+          x: restingOn.x + this._exploreDirection.x,
+          y: restingOn.y + dy
         };
-        if (view.grid.isWalkableAt(target.x, target.y)) {
+        const path = route(planner, target, view.grid);
+        if (path.length > 0) {
           this._plan = {
             type: "move",
             to: target,
-            path: [[target.x, target.y]]
+            path
           };
           return this._plan;
         }
       }
-      this._exploreDirection *= -1;
+      this._exploreDirection.x *= -1;
     }
     if (this._plan.type === "move" && this._plan.path.length > 0) {
       this._plan = follow(planner, this._plan);
@@ -211,6 +225,8 @@ class RelaxTracker extends NeedTracker {
   plan(planner: Groblin, objects: WorldView) {
     return { type: "wait" } as Plan;
   }
+
+  clear() {}
 }
 
 type Groblin = WorldObject &
@@ -220,6 +236,7 @@ type Groblin = WorldObject &
     needs: { food: FoodTracker; relax: RelaxTracker };
     plan?: Plan;
     priority?: keyof Groblin["needs"];
+    crawling: Cave | null;
     groblin: true;
   };
 

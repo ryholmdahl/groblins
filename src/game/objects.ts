@@ -1,47 +1,68 @@
-type WorldObject = {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-};
+import { createEntity, type CreateEntityArgs } from "./ecs";
 
-type Collidable = WorldObject & {
-  group: number;
-  collidesWith: Set<number>;
-  collidable: true;
-};
+const BlockComponents = ["positioned", "collidable"] as const;
+const block = (
+  args: Omit<
+    CreateEntityArgs<typeof BlockComponents>,
+    "group" | "collidesWith" | "width" | "height" | "passthrough"
+  >
+) =>
+  createEntity(BlockComponents, {
+    ...args,
+    width: 1,
+    height: 1,
+    group: 1,
+    passthrough: "solid",
+    collidesWith: new Set([0] as [0])
+  });
 
-type Movable = WorldObject & {
-  density: number;
-  velocity: { x: number; y: number };
-  landed: Block | null;
-  movable: true;
-};
+const CaveComponents = ["positioned", "collidable"] as const;
+const cave = (
+  args: Omit<
+    CreateEntityArgs<typeof CaveComponents>,
+    "group" | "collidesWith" | "width" | "height" | "passthrough"
+  >
+) =>
+  createEntity(CaveComponents, {
+    ...args,
+    group: 1,
+    collidesWith: new Set([0] as [0]),
+    width: 1,
+    height: 1,
+    passthrough: "climbable"
+  });
 
-type Edible = WorldObject &
-  Collidable &
-  Movable & {
-    food: number;
-    edible: true;
-  };
+const BerryComponents = ["positioned", "collidable", "movable", "edible"] as const;
+const berry = (
+  args: Omit<
+    CreateEntityArgs<typeof BerryComponents>,
+    "group" | "collidesWith" | "landed" | "passthrough"
+  >
+) =>
+  createEntity(BerryComponents, {
+    ...args,
+    group: 0,
+    collidesWith: new Set([0, 1]),
+    landed: null,
+    passthrough: "empty"
+  });
 
-type Block = WorldObject &
-  Collidable & {
-    group: 1;
-    exposed: {
-      left: boolean;
-      right: boolean;
-      top: boolean;
-      bottom: boolean;
-    };
-    collidesWith: Set<0>;
-    block: true;
-  };
+const GroblinComponents = ["positioned", "collidable", "movable", "groblin"] as const;
+const groblin = (
+  args: Omit<
+    CreateEntityArgs<typeof GroblinComponents>,
+    "priority" | "plan" | "group" | "collidesWith" | "landed" | "crawling" | "passthrough"
+  >
+) =>
+  createEntity(GroblinComponents, {
+    ...args,
+    group: 0,
+    collidesWith: new Set([0, 1]),
+    priority: "food",
+    plan: { type: "wait" },
+    landed: null,
+    crawling: null,
+    passthrough: "empty"
+  });
 
-type Cave = Collidable & {
-  group: 1;
-  collidesWith: Set<0>;
-  cave: true;
-};
-
-export type { WorldObject, Collidable, Movable, Edible, Block, Cave };
+export { block, cave, berry, groblin };

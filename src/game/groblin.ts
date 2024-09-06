@@ -1,4 +1,4 @@
-import type { WorldObject, Collidable, Movable, Edible, Cave } from "./objects";
+import type { EntityWithComponents } from "./ecs";
 import type { WorldView } from "./world";
 import PF from "pathfinding";
 
@@ -10,7 +10,7 @@ type Plan =
       to: { x: number; y: number };
       path: number[][];
     }
-  | { type: "eat"; what: Edible }
+  | { type: "eat"; what: EntityWithComponents<["edible", "positioned"]> }
   | {
       type: "wait";
     };
@@ -56,12 +56,19 @@ abstract class NeedTracker {
 
   tick(delta: number) {}
 
-  abstract plan(planner: Groblin, view: WorldView): Plan;
+  abstract plan(
+    planner: EntityWithComponents<["movable", "positioned", "groblin", "collidable"]>,
+    view: WorldView
+  ): Plan;
 
   abstract clear(): void;
 }
 
-function route(planner: Groblin, to: { x: number; y: number }, grid: PF.Grid) {
+function route(
+  planner: EntityWithComponents<["positioned"]>,
+  to: { x: number; y: number },
+  grid: PF.Grid
+) {
   return new PF.AStarFinder({
     diagonalMovement: PF.DiagonalMovement.Never
   }).findPath(
@@ -73,7 +80,7 @@ function route(planner: Groblin, to: { x: number; y: number }, grid: PF.Grid) {
   );
 }
 
-function follow(planner: Groblin, plan: Plan & { type: "move" }) {
+function follow(planner: EntityWithComponents<["positioned"]>, plan: Plan & { type: "move" }) {
   let xDiff = plan.path[0][0] - planner.x;
   let yDiff = plan.path[0][1] - planner.y;
   if (Math.abs(xDiff) < 0.5 && Math.abs(yDiff) < 0.5) {
@@ -141,13 +148,14 @@ class FoodTracker extends NeedTracker {
     this._plan = { type: "wait" };
   }
 
-  plan(planner: Groblin, view: WorldView) {
-    const foods =
-      view.objects.edible.length > 0
-        ? view.objects.edible
-            .filter((food) => food.landed !== null)
-            .sort((e1, e2) => Math.abs(e1.x - planner.x) - Math.abs(e2.x - planner.x))
-        : [];
+  plan(
+    planner: EntityWithComponents<["movable", "positioned", "groblin", "collidable"]>,
+    view: WorldView
+  ) {
+    const foods = view.entities
+      .having(["edible", "positioned", "movable", "collidable"])
+      .filter((food) => food.landed !== null)
+      .sort((e1, e2) => Math.abs(e1.x - planner.x) - Math.abs(e2.x - planner.x));
     for (const food of foods) {
       // If touching a food, eat it
       if (view.collidingPairs.get(planner).has(food)) {
@@ -222,23 +230,15 @@ class RelaxTracker extends NeedTracker {
     return 1 - this.get() / this.max();
   }
 
-  plan(planner: Groblin, objects: WorldView) {
+  plan(
+    planner: EntityWithComponents<["movable", "positioned", "groblin", "collidable"]>,
+    objects: WorldView
+  ) {
     return { type: "wait" } as Plan;
   }
 
   clear() {}
 }
 
-type Groblin = WorldObject &
-  Collidable &
-  Movable & {
-    name: string;
-    needs: { food: FoodTracker; relax: RelaxTracker };
-    plan?: Plan;
-    priority?: keyof Groblin["needs"];
-    crawling: Cave | null;
-    groblin: true;
-  };
-
-export type { Groblin };
+export type { Plan };
 export { FoodTracker, RelaxTracker };

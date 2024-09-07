@@ -18,17 +18,26 @@ const PAN_SPEED = 1000;
 const GRID_SIZE = 5;
 
 // Helper function to get grid cell key
-const getCellKey: (x: number, y: number) => string = (x: number, y: number) =>
-  `${Math.floor(x / GRID_SIZE)},${Math.floor(y / GRID_SIZE)}`;
 
 function collision(
+  object1: EntityWithComponents<["positioned", "collidable"]>,
+  object2: EntityWithComponents<["positioned", "collidable"]>
+) {
+  return (
+    object1.collidesWith.has(object2.group) &&
+    object2.collidesWith.has(object1.group) &&
+    intersection(object1, object2)
+  );
+}
+
+function intersection(
   object1: { x: number; y: number; width: number; height: number },
   object2: { x: number; y: number; width: number; height: number }
 ) {
   return (
     Math.abs(object1.x - object2.x) <= (object1.width + object2.width) / 2 &&
-    Math.abs(object1.y - object2.y) <= (object1.height + object2.height) / 2 + 1e-5 // without the 1e-5, objects like berries will jitter between landed and floating
-  );
+    Math.abs(object1.y - object2.y) <= (object1.height + object2.height) / 2 + 1e-5
+  ); // without the 1e-5, objects like berries will jitter between landed and floating
 }
 
 class SetMap<K, T> extends Map<K, Set<T>> {
@@ -100,6 +109,57 @@ class EntityCollection {
   }
 }
 
+class Partitions {
+  private partitions: SetMap<string, EntityWithComponents<["positioned", "collidable"]>> =
+    new SetMap();
+  private reversePartitions: Map<EntityWithComponents<["positioned", "collidable"]>, string> =
+    new Map();
+
+  private getCellKey: (x: number, y: number) => string = (x: number, y: number) =>
+    `${Math.floor(x / GRID_SIZE)},${Math.floor(y / GRID_SIZE)}`;
+
+  add(entity: EntityWithComponents<["positioned", "collidable"]>) {
+    const key = this.getCellKey(entity.x, entity.y);
+    this.partitions.add(key, entity);
+    this.reversePartitions.set(entity, key);
+  }
+
+  remove(entity: EntityWithComponents<["positioned", "collidable"]>) {
+    const key = this.getCellKey(entity.x, entity.y);
+    this.partitions.remove(key, entity);
+    this.reversePartitions.delete(entity);
+  }
+
+  move(entity: EntityWithComponents<["positioned", "collidable"]>) {
+    if (this.reversePartitions.get(entity) !== this.getCellKey(entity.x, entity.y)) {
+      this.partitions.remove(this.reversePartitions.get(entity)!, entity);
+      this.add(entity);
+    }
+  }
+
+  neighborhood(x: number, y: number, range: number) {
+    // range is in x,y, not in partitions
+    const neighbors = new Set<EntityWithComponents<["positioned", "collidable"]>>();
+    for (let dx = -Math.ceil(range / GRID_SIZE); dx <= Math.ceil(range / GRID_SIZE); dx++) {
+      for (let dy = -Math.ceil(range / GRID_SIZE); dy <= Math.ceil(range / GRID_SIZE); dy++) {
+        this.partitions
+          .get(this.getCellKey(x + dx * GRID_SIZE, y + dy * GRID_SIZE))
+          .forEach((neighbor) => {
+            if (Math.sqrt((x - neighbor.x) ** 2 + (y - neighbor.y) ** 2) <= range) {
+              neighbors.add(neighbor);
+            }
+          });
+      }
+    }
+    return neighbors;
+  }
+
+  clear() {
+    this.partitions.clear();
+    this.reversePartitions.clear();
+  }
+}
+
 type WorldView = {
   entities: EntityCollection;
   collidingPairs: SetMap<
@@ -121,8 +181,9 @@ class World {
   berryTimer: number = BERRY_TIMER_MAX;
   initialized: boolean = false;
   keys: Set<string> = new Set();
-  partitions: SetMap<string, EntityWithComponents<["positioned", "collidable"]>> = new SetMap();
-  reversePartitions: Map<EntityWithComponents<["positioned", "collidable"]>, string> = new Map();
+  // TODO: make this a quadtree
+  // TODO: make this by group so we don't check impossible collisions
+  partitions: Partitions = new Partitions();
 
   constructor(width: number, height: number) {
     this.width = width;
@@ -138,8 +199,7 @@ class World {
   add<T extends EntityWithComponents<["positioned"]>>(object: T): T {
     this.view.entities.add(object);
     if (hasComponents(object, ["positioned", "collidable"])) {
-      this.partitions.add(getCellKey(object.x, object.y), object);
-      this.reversePartitions.set(object, getCellKey(object.x, object.y));
+      this.partitions.add(object);
     }
     return object;
   }
@@ -152,9 +212,8 @@ class World {
         .forEach((other) => this.view.collidingPairs.remove(other, object));
       this.view.collidingPairs.delete(object);
     }
-    if (hasComponents(object, ["positioned", "collidable"]) && this.reversePartitions.has(object)) {
-      this.partitions.remove(this.reversePartitions.get(object)!, object);
-      this.reversePartitions.delete(object);
+    if (hasComponents(object, ["positioned", "collidable"])) {
+      this.partitions.remove(object);
     }
   }
 
@@ -179,7 +238,7 @@ class World {
       if (
         !this.view.entities
           .having(["positioned", "collidable"])
-          .some((collidable) => collision(collidable, proposed))
+          .some((collidable) => intersection(collidable, proposed))
       ) {
         this.add(
           block({
@@ -203,18 +262,7 @@ class World {
 
   // TODO: better caching
   protected getView(object: EntityWithComponents<["positioned"]>, range: number = 10): WorldView {
-    const visible = new Set<EntityWithComponents<["positioned"]>>();
-
-    for (let dx = -Math.ceil(range / GRID_SIZE); dx <= Math.ceil(range / GRID_SIZE); dx++) {
-      for (let dy = -Math.ceil(range / GRID_SIZE); dy <= Math.ceil(range / GRID_SIZE); dy++) {
-        const neighborKey = getCellKey(object.x + dx * GRID_SIZE, object.y + dy * GRID_SIZE);
-        this.partitions.get(neighborKey).forEach((other) => {
-          if (Math.sqrt((object.x - other.x) ** 2 + (object.y - other.y) ** 2) <= range) {
-            visible.add(other);
-          }
-        });
-      }
-    }
+    const visible = this.partitions.neighborhood(object.x, object.y, range);
 
     const filteredEntities = new EntityCollection();
     visible.forEach((entity) => filteredEntities.add(entity));
@@ -286,7 +334,7 @@ class World {
     this.partitions.clear();
     // Populate the grid
     this.view.entities.having(["positioned", "collidable"]).forEach((obj) => {
-      this.partitions.add(getCellKey(obj.x, obj.y), obj);
+      this.partitions.add(obj);
     });
   }
 
@@ -443,34 +491,27 @@ class World {
 
     // Check collisions using the grid
     this.view.entities.having(["positioned", "collidable", "movable"]).forEach((obj1) => {
-      for (let dx = -1; dx <= 1; dx++) {
-        for (let dy = -1; dy <= 1; dy++) {
-          const neighborKey = getCellKey(obj1.x + dx * GRID_SIZE, obj1.y + dy * GRID_SIZE);
-          this.partitions.get(neighborKey).forEach((obj2) => {
-            if (obj1 !== obj2 && collision(obj1, obj2)) {
-              this.view.collidingPairs.add(obj1, obj2);
-              this.view.collidingPairs.add(obj2, obj1);
+      // TODO: don't use grid size here
+      const neighbors = this.partitions.neighborhood(obj1.x, obj1.y, GRID_SIZE);
+      neighbors.forEach((obj2) => {
+        if (obj1 !== obj2 && collision(obj1, obj2)) {
+          this.view.collidingPairs.add(obj1, obj2);
+          this.view.collidingPairs.add(obj2, obj1);
 
-              if (obj2.passthrough === "solid") {
-                collideWithBlock(obj1, obj2);
-              }
-              if (hasComponents(obj1, ["groblin"]) && obj2.passthrough === "climbable") {
-                obj1.crawling = obj2;
-              }
-            }
-          });
+          if (obj2.passthrough === "solid") {
+            collideWithBlock(obj1, obj2);
+          }
+          if (hasComponents(obj1, ["groblin"]) && obj2.passthrough === "climbable") {
+            obj1.crawling = obj2;
+          }
         }
-      }
+      });
     });
 
     this.view.entities.having(["positioned", "collidable", "movable"]).forEach((movable) => {
       movable.x += movable.velocity.x * delta;
       movable.y += movable.velocity.y * delta;
-      if (this.reversePartitions.get(movable) !== getCellKey(movable.x, movable.y)) {
-        this.partitions.remove(this.reversePartitions.get(movable)!, movable);
-        this.partitions.add(getCellKey(movable.x, movable.y), movable);
-        this.reversePartitions.set(movable, getCellKey(movable.x, movable.y));
-      }
+      this.partitions.move(movable);
     });
   }
 }
@@ -480,8 +521,8 @@ class PixiWorld extends World {
   textures: { groblin: Texture; berry: Texture; block: Texture; cave: Texture };
   sprites: Map<EntityWithComponents<["positioned"]>, ContainerChild> = new Map();
   followFields: Map<EntityWithComponents<["positioned"]>, BitmapText> = new Map();
-  pathSprites: Sprite[] = [];
   pan: { x: number; y: number } = { x: 0, y: 0 };
+  fps: BitmapText;
 
   constructor(
     width: number,
@@ -494,6 +535,18 @@ class PixiWorld extends World {
     this.app = app;
     this.blockSize = blockSize;
     this.textures = textures;
+    this.fps = new BitmapText({
+      text: "foobar",
+      style: {
+        fontFamily: "Arial",
+        fontSize: 12,
+        fill: "white",
+        align: "center"
+      }
+    });
+    this.fps.x = 10;
+    this.fps.y = 10;
+    this.app.stage.addChild(this.fps);
   }
 
   add<T extends EntityWithComponents<["positioned"]>>(object: T): T {
@@ -560,6 +613,7 @@ class PixiWorld extends World {
 
   tick(delta: number) {
     super.tick(delta);
+    this.fps.text = `${Math.round(1 / delta)} fps`;
     if (this.keys.has("ArrowUp")) {
       this.pan.y += PAN_SPEED * delta;
     }

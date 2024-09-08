@@ -2,8 +2,6 @@ import type { EntityWithComponents } from "./ecs";
 import type { WorldView } from "./world";
 import PF from "pathfinding";
 
-const EXPLORE_VERTICAL_RANGE = 2;
-
 type Plan =
   | {
       type: "move";
@@ -101,6 +99,7 @@ class FoodTracker extends NeedTracker {
   state: "full" | "hungry" | "starving" = "full";
   private _plan: Plan = { type: "wait" };
   private _exploreDirection: { x: 1 | -1; y: 1 | -1 } = { x: -1, y: 1 };
+  private _inaccessibleFood: Set<EntityWithComponents<["edible", "positioned"]>> = new Set();
   constructor(
     initial: number,
     max: number,
@@ -146,6 +145,7 @@ class FoodTracker extends NeedTracker {
 
   clear() {
     this._plan = { type: "wait" };
+    this._inaccessibleFood.clear();
   }
 
   plan(
@@ -154,8 +154,9 @@ class FoodTracker extends NeedTracker {
   ) {
     const foods = view.entities
       .having(["edible", "positioned", "movable", "collidable"])
-      .filter((food) => food.landed !== null)
+      .filter((food) => food.landed !== null && !this._inaccessibleFood.has(food))
       .sort((e1, e2) => Math.abs(e1.x - planner.x) - Math.abs(e2.x - planner.x));
+
     for (const food of foods) {
       // If touching a food, eat it
       if (view.collidingPairs.get(planner).has(food)) {
@@ -177,41 +178,47 @@ class FoodTracker extends NeedTracker {
           path
         };
         return this._plan;
+      } else {
+        this._inaccessibleFood.add(food);
       }
     }
-    // There's no food. Explore.
-    // If not already exploring, pick a destination
+
     if (
-      (planner.landed || planner.crawling) &&
+      (planner.landed || planner.crawling) && // if this is removed, the groblin will explore every possible path when it's still floating downward
       (this._plan.type !== "move" ||
         Math.sqrt((this._plan.to.x - planner.x) ** 2 + (this._plan.to.y - planner.y) ** 2) < 0.5)
     ) {
-      const restingOn = planner.landed
-        ? { x: planner.landed.x, y: planner.landed.y - 1 }
-        : { x: planner.crawling!.x, y: planner.crawling!.y };
-      for (let dy of [
-        0,
-        ...Array.from(
-          { length: EXPLORE_VERTICAL_RANGE * 2 + 1 },
-          (_, i) => i - EXPLORE_VERTICAL_RANGE
-        ).filter((v) => v !== 0)
-      ]) {
-        const target = {
-          x: restingOn.x + this._exploreDirection.x,
-          y: restingOn.y + dy
-        };
-        const path = route(planner, target, view.grid);
-        if (path.length > 0) {
-          this._plan = {
-            type: "move",
-            to: target,
-            path
-          };
-          return this._plan;
+      const restingOn = { x: Math.round(planner.x), y: Math.round(planner.y) };
+      for (
+        let x = Math.round(planner.vision * this._exploreDirection.x);
+        this._exploreDirection.x > 0 ? x > 0 : x < 0;
+        x -= this._exploreDirection.x
+      ) {
+        for (let y = -Math.round(planner.vision); y <= Math.round(planner.vision); y++) {
+          if (
+            Math.sqrt(x ** 2 + y ** 2) <= planner.vision &&
+            view.grid.isInside(restingOn.x + x, restingOn.y + y) &&
+            view.grid.isWalkableAt(restingOn.x + x, restingOn.y + y)
+          ) {
+            const target = {
+              x: restingOn.x + x,
+              y: restingOn.y + y
+            };
+            const path = route(planner, target, view.grid);
+            if (path.length > 0) {
+              this._plan = {
+                type: "move",
+                to: target,
+                path
+              };
+              return this._plan;
+            }
+          }
         }
       }
       this._exploreDirection.x *= -1;
     }
+
     if (this._plan.type === "move" && this._plan.path.length > 0) {
       this._plan = follow(planner, this._plan);
       return this._plan;

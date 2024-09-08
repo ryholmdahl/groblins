@@ -24,7 +24,7 @@ async function createApp() {
   //   const bunny = new Sprite(texture);
 
   const width = 500;
-  const height = 30;
+  const height = 300;
 
   const world: World = new PixiWorld(width, height, app, 20, {
     groblin: await Assets.load(bunnyPng),
@@ -101,7 +101,7 @@ async function createApp() {
   window.addEventListener("keyup", (event) => world.keyUp(event.key));
   // Add an animation loop callback to the application's ticker.
   app.ticker.add((time) => {
-    world.tick(time.deltaMS / 1000);
+    world.tick(Math.min(time.deltaMS / 1000, 1 / 60));
   });
 }
 

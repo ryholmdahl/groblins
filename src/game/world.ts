@@ -6,10 +6,8 @@ import { berry, block, cave } from "./objects";
 import type { Entries } from "type-fest";
 import PF from "pathfinding";
 
-const GROBLIN_MAX_SPEED = 3;
 const TERMINAL_VELOCITY = 10;
 const BERRY_TIMER_MAX = 2;
-const GROBLIN_VISION = 20;
 const GRAVITY = 100;
 const JUMP_POP = 15;
 const WALL_ELASTICITY = 0.1;
@@ -220,7 +218,7 @@ class World {
   pointerDown(x: number, y: number) {
     const proposed = { x: Math.round(x), y: Math.round(y), width: 0.99, height: 0.99 };
     const existingBlock = this.view.entities
-      .having(["positioned", "collidable"], ["movable"])
+      .having(["collidable", "positioned"], ["movable"])
       .find((block) => block.x === proposed.x && block.y === proposed.y);
 
     if (existingBlock) {
@@ -237,7 +235,7 @@ class World {
       // Add a new block if there isn't one already
       if (
         !this.view.entities
-          .having(["positioned", "collidable"])
+          .having(["collidable", "positioned"])
           .some((collidable) => intersection(collidable, proposed))
       ) {
         this.add(
@@ -249,7 +247,13 @@ class World {
       }
     }
 
-    this.resetGridAndPartitions({ x: proposed.x, y: proposed.y });
+    const toUpdate = [{ x: proposed.x, y: proposed.y }];
+    for (let x = proposed.x - 3; x <= proposed.x + 3; x++) {
+      for (let y = proposed.y - 3; y <= proposed.y + 3; y++) {
+        toUpdate.push({ x, y });
+      }
+    }
+    this.updateGrid(toUpdate);
   }
 
   keyDown(key: string) {
@@ -276,52 +280,43 @@ class World {
     };
   }
 
-  private resetGridAndPartitions(updated?: { x: number; y: number }) {
-    const blocksToCheck = updated
-      ? this.view.entities
-          .having(["positioned", "collidable"], ["movable"])
-          .filter(
-            (collidable) =>
-              collidable.passthrough === "solid" &&
-              Math.abs(collidable.x - updated.x) <= 2 &&
-              Math.abs(collidable.y - updated.y) <= 2
-          )
-      : this.view.entities
-          .having(["positioned", "collidable"], ["movable"])
-          .filter((collidable) => collidable.passthrough === "solid");
+  private updateGrid(updated: { x: number; y: number }[]) {
+    const allBlocks: Map<string, EntityWithComponents<["positioned", "collidable"]>> = new Map();
+    this.view.entities
+      .having(["collidable", "positioned"], ["movable"])
+      .filter((collidable) => collidable.passthrough === "solid")
+      .forEach((block) => {
+        allBlocks.set(`${block.x},${block.y}`, block);
+      });
+    const allCaves: Map<string, EntityWithComponents<["positioned", "collidable"]>> = new Map();
+    this.view.entities
+      .having(["collidable", "positioned"], ["movable"])
+      .filter((collidable) => collidable.passthrough === "climbable")
+      .forEach((cave) => {
+        allCaves.set(`${cave.x},${cave.y}`, cave);
+      });
+    // for each block in an updated position, set above it to passable
+    // set the side of it to passable if there's a block two below
 
-    blocksToCheck.forEach((block) => {
-      if (block.y - 1 >= 0) {
-        this.view.grid.setWalkableAt(block.x, block.y - 1, true);
-      }
-      if (
-        block.y - 2 >= 0 &&
-        blocksToCheck.some((other) => other.y === block.y - 1 && Math.abs(block.x - other.x) === 1)
+    updated.forEach((update) => {
+      if (allBlocks.has(`${update.x},${update.y}`)) {
+        this.view.grid.setWalkableAt(update.x, update.y, false);
+      } else if (allCaves.has(`${update.x},${update.y}`)) {
+        this.view.grid.setWalkableAt(update.x, update.y, true);
+      } else if (
+        allBlocks.has(`${update.x},${update.y + 1}`) ||
+        allCaves.has(`${update.x},${update.y + 1}`)
       ) {
-        this.view.grid.setWalkableAt(block.x, block.y - 2, true);
+        this.view.grid.setWalkableAt(update.x, update.y, true);
+      } else if (
+        allBlocks.has(`${update.x},${update.y + 2}`) &&
+        (allBlocks.has(`${update.x + 1},${update.y + 1}`) ||
+          allBlocks.has(`${update.x - 1},${update.y + 1}`))
+      ) {
+        this.view.grid.setWalkableAt(update.x, update.y, true);
+      } else {
+        this.view.grid.setWalkableAt(update.x, update.y, false);
       }
-    });
-
-    const cavesToCheck = updated
-      ? this.view.entities
-          .having(["positioned", "collidable"], ["movable"])
-          .filter(
-            (collidable) =>
-              collidable.passthrough === "climbable" &&
-              Math.abs(collidable.x - updated.x) <= 2 &&
-              Math.abs(collidable.y - updated.y) <= 2
-          )
-      : this.view.entities
-          .having(["positioned", "collidable"], ["movable"])
-          .filter((collidable) => collidable.passthrough === "climbable");
-
-    cavesToCheck.forEach((cave) => {
-      this.view.grid.setWalkableAt(cave.x, cave.y, true);
-      this.view.grid.setWalkableAt(cave.x, cave.y - 1, true);
-    });
-
-    blocksToCheck.forEach((block) => {
-      this.view.grid.setWalkableAt(block.x, block.y, false);
     });
 
     this.view.entities.having(["groblin"]).forEach((groblin) => {
@@ -333,7 +328,7 @@ class World {
 
     this.partitions.clear();
     // Populate the grid
-    this.view.entities.having(["positioned", "collidable"]).forEach((obj) => {
+    this.view.entities.having(["collidable", "positioned"]).forEach((obj) => {
       this.partitions.add(obj);
     });
   }
@@ -341,7 +336,13 @@ class World {
   tick(delta: number): void {
     if (!this.initialized) {
       this.initialized = true;
-      this.resetGridAndPartitions();
+      const allCoords: { x: number; y: number }[] = [];
+      for (let x = 0; x < this.width; x++) {
+        for (let y = 0; y < this.height; y++) {
+          allCoords.push({ x, y });
+        }
+      }
+      this.updateGrid(allCoords);
     }
 
     this.berryTimer -= delta;
@@ -386,10 +387,8 @@ class World {
           groblin.needs[groblin.priority].clear();
         }
       });
-      groblin.plan = groblin.needs[groblin.priority!].plan(
-        groblin,
-        this.getView(groblin, GROBLIN_VISION)
-      );
+      const view = this.getView(groblin, groblin.vision);
+      groblin.plan = groblin.needs[groblin.priority!].plan(groblin, view);
     };
 
     const groblinMove = (
@@ -399,21 +398,19 @@ class World {
       if (plan.path.length > 0) {
         let xDiff = plan.path[0][0] - groblin.x;
         let yDiff = plan.path[0][1] - groblin.y;
-        if (
-          ((xDiff > 0 && groblin.velocity.x < GROBLIN_MAX_SPEED) ||
-            (xDiff < 0 && groblin.velocity.x > -GROBLIN_MAX_SPEED)) &&
-          (groblin.velocity.y <= 0 || groblin.crawling !== null)
-        ) {
-          groblin.velocity.x = GROBLIN_MAX_SPEED * Math.sign(xDiff);
+        if (groblin.velocity.y <= 0 || groblin.crawling !== null) {
+          if (Math.abs(xDiff) > groblin.speed * delta) {
+            groblin.velocity.x = groblin.speed * Math.sign(xDiff);
+          } else {
+            groblin.velocity.x = xDiff / delta;
+          }
         }
         // Allow vertical movement in caves
         if (groblin.crawling !== null) {
-          if (yDiff > 0 && groblin.velocity.y < GROBLIN_MAX_SPEED) {
-            groblin.velocity.y = GROBLIN_MAX_SPEED;
-          } else if (yDiff < 0 && groblin.velocity.y > -GROBLIN_MAX_SPEED) {
-            groblin.velocity.y = -GROBLIN_MAX_SPEED;
+          if (Math.abs(yDiff) > groblin.speed * delta) {
+            groblin.velocity.y = groblin.speed * Math.sign(yDiff);
           } else {
-            groblin.velocity.y = 0;
+            groblin.velocity.y = yDiff / delta;
           }
         } else if (yDiff < -0.5 && groblin.landed !== null) {
           groblin.velocity.y = -JUMP_POP;
@@ -466,7 +463,7 @@ class World {
           if (Math.abs(movable.velocity.x) < DRAG * delta) {
             movable.velocity.x = 0;
           }
-          movable.y = Math.min(movable.y, block.y - block.height / 2 - movable.height / 2);
+          movable.y = Math.min(movable.y, block.y - block.height / 2 - movable.height / 2 + 0.001);
         }
       } else {
         if (dx > 0) {
@@ -490,7 +487,7 @@ class World {
     this.view.collidingPairs.clear();
 
     // Check collisions using the grid
-    this.view.entities.having(["positioned", "collidable", "movable"]).forEach((obj1) => {
+    this.view.entities.having(["movable", "positioned", "collidable"]).forEach((obj1) => {
       // TODO: don't use grid size here
       const neighbors = this.partitions.neighborhood(obj1.x, obj1.y, GRID_SIZE);
       neighbors.forEach((obj2) => {
@@ -508,20 +505,84 @@ class World {
       });
     });
 
-    this.view.entities.having(["positioned", "collidable", "movable"]).forEach((movable) => {
+    this.view.entities.having(["movable", "positioned", "collidable"]).forEach((movable) => {
       movable.x += movable.velocity.x * delta;
       movable.y += movable.velocity.y * delta;
       this.partitions.move(movable);
     });
   }
 }
+
+class SpritePool {
+  // a class that contains sprites of a certain texture, and can return a sprite to the pool when it's no longer needed
+  private textures: Map<EntityWithComponents<["positioned"]>, Texture> = new Map();
+  private used: Map<EntityWithComponents<["positioned"]>, ContainerChild> = new Map();
+  private free: Map<Texture, ContainerChild[]> = new Map();
+  private blockSize: number;
+  private app: Application;
+
+  constructor(app: Application, blockSize: number) {
+    this.app = app;
+    this.blockSize = blockSize;
+  }
+
+  init(entity: EntityWithComponents<["positioned"]>, texture: Texture) {
+    this.textures.set(entity, texture);
+  }
+
+  get(entity: EntityWithComponents<["positioned"]>): ContainerChild {
+    if (this.used.has(entity)) {
+      return this.used.get(entity)!;
+    }
+    const texture = this.textures.get(entity)!;
+    if (this.free.has(texture) && this.free.get(texture)!.length > 0) {
+      const sprite = this.free.get(texture)!.pop()!;
+      sprite.visible = true;
+      this.used.set(entity, sprite);
+      return sprite;
+    }
+    const sprite = new Sprite(texture);
+    sprite.anchor.set(0.5);
+    sprite.scale =
+      ((this.blockSize * entity.width) / texture.width,
+      (this.blockSize * entity.height) / texture.height);
+    this.used.set(entity, sprite);
+    this.app.stage.addChild(sprite);
+    return sprite;
+  }
+
+  recycle(entity: EntityWithComponents<["positioned"]>) {
+    const sprite = this.used.get(entity);
+    const texture = this.textures.get(entity);
+    if (sprite && texture) {
+      this.used.delete(entity);
+      if (this.free.has(texture)) {
+        this.free.get(texture)!.push(sprite);
+      } else {
+        this.free.set(texture, [sprite]);
+      }
+      sprite.visible = false;
+    }
+  }
+
+  delete(entity: EntityWithComponents<["positioned"]>) {
+    this.recycle(entity);
+    this.textures.delete(entity);
+  }
+
+  entities() {
+    return [...this.used.keys()];
+  }
+}
+
 class PixiWorld extends World {
   app: Application;
   blockSize: number;
   textures: { groblin: Texture; berry: Texture; block: Texture; cave: Texture };
-  sprites: Map<EntityWithComponents<["positioned"]>, ContainerChild> = new Map();
+  sprites: SpritePool;
   followFields: Map<EntityWithComponents<["positioned"]>, BitmapText> = new Map();
   pan: { x: number; y: number } = { x: 0, y: 0 };
+  pathSprites: Map<EntityWithComponents<["groblin"]>, ContainerChild[]> = new Map();
   fps: BitmapText;
 
   constructor(
@@ -535,6 +596,7 @@ class PixiWorld extends World {
     this.app = app;
     this.blockSize = blockSize;
     this.textures = textures;
+    this.sprites = new SpritePool(app, blockSize);
     this.fps = new BitmapText({
       text: "foobar",
       style: {
@@ -578,16 +640,11 @@ class PixiWorld extends World {
       texture = this.textures.cave;
     }
     if (texture) {
-      const sprite = new Sprite(texture);
-      sprite.anchor.set(0.5);
-      sprite.scale =
-        ((this.blockSize * object.width) / texture.width,
-        (this.blockSize * object.height) / texture.height);
-      this.app.stage.addChild(sprite);
-      this.sprites.set(object, sprite);
+      this.sprites.init(object, texture);
     }
     if (textStyle) {
       const text = new BitmapText({ text: "foobar", style: textStyle });
+      text.zIndex = 1000;
       this.app.stage.addChild(text);
       this.followFields.set(object, text);
     }
@@ -596,10 +653,6 @@ class PixiWorld extends World {
 
   remove(object: EntityWithComponents<["positioned"]>) {
     super.remove(object);
-    const sprite = this.sprites.get(object);
-    if (sprite) {
-      this.app.stage.removeChild(sprite);
-    }
     const text = this.followFields.get(object);
     if (text) {
       this.app.stage.removeChild(text);
@@ -613,7 +666,38 @@ class PixiWorld extends World {
 
   tick(delta: number) {
     super.tick(delta);
+
+    this.view.entities.having(["groblin"]).forEach((groblin) => {
+      if (groblin.plan?.type === "move") {
+        const path = groblin.plan.path;
+        if (path) {
+          const pathSprites = this.pathSprites.get(groblin);
+          if (!pathSprites) {
+            this.pathSprites.set(groblin, []);
+          }
+          path.forEach(([x, y], i) => {
+            if (i >= this.pathSprites.get(groblin)!.length) {
+              const sprite = new Sprite(this.textures.groblin);
+              sprite.alpha = 0.5;
+              sprite.anchor.set(0.5);
+              sprite.scale.set(this.textures.groblin.width / this.blockSize / 4);
+              this.app.stage.addChild(sprite);
+              this.pathSprites.get(groblin)!.push(sprite);
+            }
+            const sprite = this.pathSprites.get(groblin)![i];
+            sprite.visible = true;
+            sprite.x = x * this.blockSize + this.pan.x;
+            sprite.y = y * this.blockSize + this.pan.y;
+          });
+          for (let i = path.length; i < this.pathSprites.get(groblin)!.length; i++) {
+            this.pathSprites.get(groblin)![i].visible = false;
+          }
+        }
+      }
+    });
+
     this.fps.text = `${Math.round(1 / delta)} fps`;
+
     if (this.keys.has("ArrowUp")) {
       this.pan.y += PAN_SPEED * delta;
     }
@@ -626,22 +710,39 @@ class PixiWorld extends World {
     if (this.keys.has("ArrowRight")) {
       this.pan.x -= PAN_SPEED * delta;
     }
+
     const viewedObjects = new Set<EntityWithComponents<["positioned"]>>();
     this.view.entities
-      .having(["positioned", "groblin"])
-      .map((groblin) => this.getView(groblin, GROBLIN_VISION).entities.having(["positioned"]))
+      .having(["groblin", "positioned"])
+      .map((groblin) => this.getView(groblin, groblin.vision).entities.having(["positioned"]))
       .flat()
       .forEach((object) => viewedObjects.add(object));
-    this.view.entities.having(["positioned"]).forEach((object) => {
-      this.sprites.get(object)!.x = object.x * this.blockSize + this.pan.x;
-      this.sprites.get(object)!.y = object.y * this.blockSize + this.pan.y;
+
+    const entitiesInWindow = this.partitions.neighborhood(
+      (this.app.screen.width / 2 - this.pan.x) / this.blockSize,
+      (this.app.screen.height / 2 - this.pan.y) / this.blockSize,
+      Math.max(this.app.screen.width, this.app.screen.height) / this.blockSize
+    );
+    this.sprites.entities().forEach((object) => {
+      if (!entitiesInWindow.has(object as EntityWithComponents<["positioned", "collidable"]>)) {
+        this.sprites.recycle(object);
+        const text = this.followFields.get(object);
+        if (text) {
+          text.visible = false;
+        }
+      }
+    });
+    entitiesInWindow.forEach((object) => {
+      this.sprites.get(object).x = object.x * this.blockSize + this.pan.x;
+      this.sprites.get(object).y = object.y * this.blockSize + this.pan.y;
       if (viewedObjects.has(object)) {
-        this.sprites.get(object)!.alpha = 1;
+        this.sprites.get(object).alpha = 1;
       } else {
-        this.sprites.get(object)!.alpha = 0.5;
+        this.sprites.get(object).alpha = 0.5;
       }
       const text = this.followFields.get(object);
       if (text) {
+        text.visible = true;
         text.x = object.x * this.blockSize + this.pan.x;
         text.y = object.y * this.blockSize + this.pan.y;
         if (hasComponents(object, ["movable", "groblin"])) {

@@ -31,6 +31,8 @@ interface GroblinComponent {
   plan: Plan;
   priority: keyof GroblinComponent["needs"];
   crawling: EntityWithComponents<["positioned", "collidable"]> | null;
+  vision: number;
+  speed: number;
 }
 
 // Create a mapped type for component names

@@ -47,14 +47,40 @@ const berry = (
     passthrough: "empty"
   });
 
+const BASE_STATS = {
+  vision: 20,
+  speed: 3
+};
+
 const GroblinComponents = ["positioned", "collidable", "movable", "groblin"] as const;
 const groblin = (
   args: Omit<
     CreateEntityArgs<typeof GroblinComponents>,
-    "priority" | "plan" | "group" | "collidesWith" | "landed" | "crawling" | "passthrough"
+    | "priority"
+    | "plan"
+    | "group"
+    | "collidesWith"
+    | "landed"
+    | "crawling"
+    | "passthrough"
+    | keyof typeof BASE_STATS
   >
-) =>
-  createEntity(GroblinComponents, {
+) => {
+  // jitter each stat, then normalize
+  const statMultipliers = {
+    vision: 1 + Math.random(),
+    speed: 1 + Math.random()
+  };
+  const stats = {
+    ...BASE_STATS
+  };
+  Object.entries(statMultipliers).forEach(([state, multiplier]) => {
+    stats[state] =
+      ((BASE_STATS[state] * multiplier) /
+        Object.values(statMultipliers).reduce((a, b) => a + b, 0)) *
+      Object.values(statMultipliers).length;
+  });
+  return createEntity(GroblinComponents, {
     ...args,
     group: 0,
     collidesWith: new Set([0, 1]),
@@ -62,7 +88,9 @@ const groblin = (
     plan: { type: "wait" },
     landed: null,
     crawling: null,
-    passthrough: "empty"
+    passthrough: "empty",
+    ...stats
   });
+};
 
 export { block, cave, berry, groblin };

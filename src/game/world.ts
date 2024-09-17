@@ -7,15 +7,56 @@ import type { Entries } from "type-fest";
 import PF from "pathfinding";
 
 const TERMINAL_VELOCITY = 10;
-const BERRY_TIMER_MAX = 2;
+const BERRY_TIMER_MAX = 0.1;
 const GRAVITY = 100;
 const JUMP_POP = 15;
 const WALL_ELASTICITY = 0.1;
 const DRAG = 3;
 const PAN_SPEED = 1000;
-const GRID_SIZE = 5;
+const GRID_SIZE = 2;
 
-// Helper function to get grid cell key
+class Profiler {
+  private starts: [string, number][] = [];
+  private deltas: Map<string, [number, number]> = new Map(); // delta and depth
+  private lastLogTime: number = performance.now();
+
+  start(key: string) {
+    this.starts.push([key, performance.now()]);
+  }
+
+  end(expectedKey: string) {
+    const [key, time] = this.starts.pop()!;
+    if (key !== expectedKey) {
+      throw new Error(`Expected key ${expectedKey} but got ${key}`);
+    }
+    if (!this.deltas.has(key)) {
+      this.deltas.set(key, [0, this.starts.length]);
+    }
+    const [delta, depth] = this.deltas.get(key)!;
+    this.deltas.set(key, [delta + performance.now() - time, Math.max(depth, this.starts.length)]);
+  }
+
+  log(metadata: Partial<Record<string, number>>) {
+    const logDelta = performance.now() - this.lastLogTime;
+    if (logDelta > 3000) {
+      console.log(
+        [...this.deltas.entries()]
+          .reverse()
+          .map(
+            ([key, [delta, depth]]) =>
+              `${" ".repeat(depth * 2)}${key}: ${delta.toFixed(2)}ms (${((delta / logDelta) * 100).toFixed(2)}%)`
+          )
+          .join("\n")
+      );
+      console.log(metadata);
+      this.starts.length = 0;
+      this.deltas.clear();
+      this.lastLogTime = performance.now();
+    }
+  }
+}
+
+const PROFILER = new Profiler();
 
 function collision(
   object1: EntityWithComponents<["positioned", "collidable"]>,
@@ -112,6 +153,7 @@ class Partitions {
     new SetMap();
   private reversePartitions: Map<EntityWithComponents<["positioned", "collidable"]>, string> =
     new Map();
+  private moved: Set<string> = new Set();
 
   private getCellKey: (x: number, y: number) => string = (x: number, y: number) =>
     `${Math.floor(x / GRID_SIZE)},${Math.floor(y / GRID_SIZE)}`;
@@ -120,6 +162,9 @@ class Partitions {
     const key = this.getCellKey(entity.x, entity.y);
     this.partitions.add(key, entity);
     this.reversePartitions.set(entity, key);
+    if (hasComponents(entity, ["movable"])) {
+      this.moved.add(key);
+    }
   }
 
   remove(entity: EntityWithComponents<["positioned", "collidable"]>) {
@@ -128,33 +173,47 @@ class Partitions {
     this.reversePartitions.delete(entity);
   }
 
-  move(entity: EntityWithComponents<["positioned", "collidable"]>) {
+  move(entity: EntityWithComponents<["positioned", "collidable", "movable"]>) {
+    this.moved.add(this.getCellKey(entity.x, entity.y));
     if (this.reversePartitions.get(entity) !== this.getCellKey(entity.x, entity.y)) {
       this.partitions.remove(this.reversePartitions.get(entity)!, entity);
       this.add(entity);
     }
   }
 
+  hasMoved(entity: EntityWithComponents<["positioned", "collidable", "movable"]>) {
+    return this.moved.has(this.getCellKey(entity.x, entity.y));
+  }
+
+  neighborhoodsWithMovement(): EntityWithComponents<["positioned", "collidable"]>[][] {
+    const neighborhoods = Array.from(this.moved).map((key) => {
+      const [x, y] = key.split(",").map(Number);
+      return this.neighborhood(x * GRID_SIZE + 1, y * GRID_SIZE + 1, GRID_SIZE);
+    });
+    this.moved.clear();
+    return neighborhoods;
+  }
+
   neighborhood(x: number, y: number, range: number) {
     // range is in x,y, not in partitions
-    const neighbors = new Set<EntityWithComponents<["positioned", "collidable"]>>();
+    const ranges: [number, number][] = [];
     for (let dx = -Math.ceil(range / GRID_SIZE); dx <= Math.ceil(range / GRID_SIZE); dx++) {
       for (let dy = -Math.ceil(range / GRID_SIZE); dy <= Math.ceil(range / GRID_SIZE); dy++) {
-        this.partitions
-          .get(this.getCellKey(x + dx * GRID_SIZE, y + dy * GRID_SIZE))
-          .forEach((neighbor) => {
-            if (Math.sqrt((x - neighbor.x) ** 2 + (y - neighbor.y) ** 2) <= range) {
-              neighbors.add(neighbor);
-            }
-          });
+        ranges.push([dx, dy]);
       }
     }
-    return neighbors;
+    return ranges
+      .map(([dx, dy]) =>
+        Array.from(this.partitions.get(this.getCellKey(x + dx * GRID_SIZE, y + dy * GRID_SIZE)))
+      )
+      .flat()
+      .filter((entity) => Math.sqrt((x - entity.x) ** 2 + (y - entity.y) ** 2) <= range);
   }
 
   clear() {
     this.partitions.clear();
     this.reversePartitions.clear();
+    this.moved.clear();
   }
 }
 
@@ -187,8 +246,8 @@ class World {
     this.width = width;
     this.height = height;
     this.view.grid = new PF.Grid(width + 1, height + 1);
-    for (let x = 0; x < this.width; x++) {
-      for (let y = 0; y < this.height; y++) {
+    for (let x = 0; x <= this.width; x++) {
+      for (let y = 0; y <= this.height; y++) {
         this.view.grid.setWalkableAt(x, y, false);
       }
     }
@@ -266,7 +325,7 @@ class World {
 
   // TODO: better caching
   protected getView(object: EntityWithComponents<["positioned"]>, range: number = 10): WorldView {
-    const visible = this.partitions.neighborhood(object.x, object.y, range);
+    const visible = new Set(this.partitions.neighborhood(object.x, object.y, range));
 
     const filteredEntities = new EntityCollection();
     visible.forEach((entity) => filteredEntities.add(entity));
@@ -314,7 +373,7 @@ class World {
           allBlocks.has(`${update.x - 1},${update.y + 1}`))
       ) {
         this.view.grid.setWalkableAt(update.x, update.y, true);
-      } else {
+      } else if (this.view.grid.isInside(update.x, update.y)) {
         this.view.grid.setWalkableAt(update.x, update.y, false);
       }
     });
@@ -334,6 +393,7 @@ class World {
   }
 
   tick(delta: number): void {
+    PROFILER.start("base tick");
     if (!this.initialized) {
       this.initialized = true;
       const allCoords: { x: number; y: number }[] = [];
@@ -350,7 +410,7 @@ class World {
       this.berryTimer = BERRY_TIMER_MAX;
       this.add(
         berry({
-          x: Math.round(2 + Math.random() * 47),
+          x: Math.round(2 + Math.random() * (this.width - 5)),
           y: 2,
           width: 0.9,
           height: 0.9,
@@ -418,13 +478,19 @@ class World {
       }
     };
 
+    PROFILER.start("groblins");
     this.view.entities
       .having(["groblin", "positioned", "movable", "collidable"])
       .forEach((groblin) => {
+        PROFILER.start(`groblin set plan`);
         groblinSetPlan(groblin);
+        PROFILER.end(`groblin set plan`);
+        PROFILER.start(`groblin move`);
         if (groblin.plan && groblin.plan.type === "move") {
           groblinMove(groblin, groblin.plan);
         }
+        PROFILER.end(`groblin move`);
+        PROFILER.start(`groblin eat`);
         if (
           groblin.plan &&
           groblin.plan.type === "eat" &&
@@ -434,9 +500,20 @@ class World {
           this.remove(groblin.plan.what);
         }
         groblin.crawling = null;
+        PROFILER.end(`groblin eat`);
       });
+    PROFILER.end("groblins");
 
-    this.view.entities.having(["movable"]).forEach((movable) => (movable.landed = null));
+    // only reset landed if the object has moved
+    this.view.entities.having(["movable", "positioned", "collidable"]).forEach((movable) => {
+      if (this.partitions.hasMoved(movable)) {
+        movable.landed = null;
+        this.view.collidingPairs
+          .get(movable)
+          .forEach((other) => this.view.collidingPairs.remove(other, movable));
+        this.view.collidingPairs.delete(movable);
+      }
+    });
 
     const collideWithBlock = (
       movable: EntityWithComponents<["positioned", "movable"]>,
@@ -484,32 +561,49 @@ class World {
       }
     };
 
-    this.view.collidingPairs.clear();
-
     // Check collisions using the grid
-    this.view.entities.having(["movable", "positioned", "collidable"]).forEach((obj1) => {
-      // TODO: don't use grid size here
-      const neighbors = this.partitions.neighborhood(obj1.x, obj1.y, GRID_SIZE);
-      neighbors.forEach((obj2) => {
-        if (obj1 !== obj2 && collision(obj1, obj2)) {
-          this.view.collidingPairs.add(obj1, obj2);
-          this.view.collidingPairs.add(obj2, obj1);
+    PROFILER.start("collisions");
+    PROFILER.start("neighborhoods");
+    const neighborhoods = this.partitions.neighborhoodsWithMovement();
+    PROFILER.end("neighborhoods");
+    PROFILER.start("intersecting");
+    neighborhoods.forEach((neighborhood) => {
+      for (let i = 0; i < neighborhood.length; i++) {
+        for (let j = i + 1; j < neighborhood.length; j++) {
+          const obj1 = neighborhood[i];
+          const obj2 = neighborhood[j];
+          if (collision(obj1, obj2)) {
+            this.view.collidingPairs.add(obj1, obj2);
+            this.view.collidingPairs.add(obj2, obj1);
 
-          if (obj2.passthrough === "solid") {
-            collideWithBlock(obj1, obj2);
-          }
-          if (hasComponents(obj1, ["groblin"]) && obj2.passthrough === "climbable") {
-            obj1.crawling = obj2;
+            if (hasComponents(obj1, ["movable"]) && obj2.passthrough === "solid") {
+              collideWithBlock(obj1, obj2);
+            }
+            if (hasComponents(obj2, ["movable"]) && obj1.passthrough === "solid") {
+              collideWithBlock(obj2, obj1);
+            }
+            if (hasComponents(obj1, ["groblin"]) && obj2.passthrough === "climbable") {
+              obj1.crawling = obj2;
+            }
+            if (hasComponents(obj2, ["groblin"]) && obj1.passthrough === "climbable") {
+              obj2.crawling = obj1;
+            }
           }
         }
-      });
+      }
     });
-
+    PROFILER.end("intersecting");
+    PROFILER.end("collisions");
+    PROFILER.start("move");
     this.view.entities.having(["movable", "positioned", "collidable"]).forEach((movable) => {
-      movable.x += movable.velocity.x * delta;
-      movable.y += movable.velocity.y * delta;
-      this.partitions.move(movable);
+      if (movable.velocity.x !== 0 || movable.velocity.y !== 0) {
+        movable.x += movable.velocity.x * delta;
+        movable.y += movable.velocity.y * delta;
+        this.partitions.move(movable);
+      }
     });
+    PROFILER.end("move");
+    PROFILER.end("base tick");
   }
 }
 
@@ -665,8 +759,11 @@ class PixiWorld extends World {
   }
 
   tick(delta: number) {
+    PROFILER.start("pixi tick");
     super.tick(delta);
 
+    PROFILER.start("pixi");
+    PROFILER.start("pathfinding sprites");
     this.view.entities.having(["groblin"]).forEach((groblin) => {
       if (groblin.plan?.type === "move") {
         const path = groblin.plan.path;
@@ -695,6 +792,7 @@ class PixiWorld extends World {
         }
       }
     });
+    PROFILER.end("pathfinding sprites");
 
     this.fps.text = `${Math.round(1 / delta)} fps`;
 
@@ -711,17 +809,22 @@ class PixiWorld extends World {
       this.pan.x -= PAN_SPEED * delta;
     }
 
+    PROFILER.start("viewed objects");
     const viewedObjects = new Set<EntityWithComponents<["positioned"]>>();
     this.view.entities
       .having(["groblin", "positioned"])
       .map((groblin) => this.getView(groblin, groblin.vision).entities.having(["positioned"]))
       .flat()
       .forEach((object) => viewedObjects.add(object));
+    PROFILER.end("viewed objects");
 
-    const entitiesInWindow = this.partitions.neighborhood(
-      (this.app.screen.width / 2 - this.pan.x) / this.blockSize,
-      (this.app.screen.height / 2 - this.pan.y) / this.blockSize,
-      Math.max(this.app.screen.width, this.app.screen.height) / this.blockSize
+    PROFILER.start("entities in window");
+    const entitiesInWindow = new Set(
+      this.partitions.neighborhood(
+        (this.app.screen.width / 2 - this.pan.x) / this.blockSize,
+        (this.app.screen.height / 2 - this.pan.y) / this.blockSize,
+        Math.max(this.app.screen.width, this.app.screen.height) / this.blockSize
+      )
     );
     this.sprites.entities().forEach((object) => {
       if (!entitiesInWindow.has(object as EntityWithComponents<["positioned", "collidable"]>)) {
@@ -732,6 +835,8 @@ class PixiWorld extends World {
         }
       }
     });
+    PROFILER.end("entities in window");
+    PROFILER.start("update sprites");
     entitiesInWindow.forEach((object) => {
       this.sprites.get(object).x = object.x * this.blockSize + this.pan.x;
       this.sprites.get(object).y = object.y * this.blockSize + this.pan.y;
@@ -757,6 +862,12 @@ class PixiWorld extends World {
           text.text = object.landed ? "landed" : "floating";
         }
       }
+    });
+    PROFILER.end("update sprites");
+    PROFILER.end("pixi");
+    PROFILER.end("pixi tick");
+    PROFILER.log({
+      "total movables: ": this.view.entities.having(["movable"]).length
     });
   }
 }

@@ -78,6 +78,60 @@ function route(
   );
 }
 
+function explore(
+  planner: EntityWithComponents<["positioned", "groblin"]>,
+  grid: PF.Grid,
+  exploreDirection: 1 | -1
+) {
+  // the goal here is not to get to any particular point, but to find the path that goes the farthest from the groblin
+  // while still being in vision range
+  const visited = new Set<string>();
+  const toVisit: { x: number; y: number; path: number[][] }[] = [
+    {
+      x: Math.round(planner.x),
+      y: Math.round(planner.y),
+      path: []
+    }
+  ];
+  let longest: { x: number; y: number; path: number[][] } | undefined = undefined;
+  while (toVisit.length > 0) {
+    const current = toVisit.pop();
+    if (current === undefined) {
+      break;
+    }
+    visited.add(current.x + "," + current.y);
+    const distance = Math.sqrt((current.x - planner.x) ** 2 + (current.y - planner.y) ** 2);
+    if (
+      longest === undefined ||
+      distance > Math.sqrt((longest.x - planner.x) ** 2 + (longest.y - planner.y) ** 2)
+    ) {
+      longest = current;
+    }
+    const neighbors = grid.getNeighbors(
+      grid.getNodeAt(current.x, current.y),
+      PF.DiagonalMovement.Never
+    );
+    for (const neighbor of neighbors) {
+      if (
+        visited.has(neighbor.x + "," + neighbor.y) ||
+        (exploreDirection === 1 && neighbor.x < planner.x) ||
+        (exploreDirection === -1 && neighbor.x > planner.x) ||
+        !grid.isWalkableAt(neighbor.x, neighbor.y) ||
+        !grid.isInside(neighbor.x, neighbor.y) ||
+        Math.sqrt((neighbor.x - planner.x) ** 2 + (neighbor.y - planner.y) ** 2) > planner.vision
+      ) {
+        continue;
+      }
+      toVisit.push({
+        x: neighbor.x,
+        y: neighbor.y,
+        path: [...current.path, [neighbor.x, neighbor.y]]
+      });
+    }
+  }
+  return longest?.path ?? [];
+}
+
 function follow(planner: EntityWithComponents<["positioned"]>, plan: Plan & { type: "move" }) {
   let xDiff = plan.path[0][0] - planner.x;
   let yDiff = plan.path[0][1] - planner.y;
@@ -165,7 +219,6 @@ class FoodTracker extends NeedTracker {
       }
       // If already planning to get a food, keep at it
       if (this._plan.type === "move" && this._plan.to.x === food.x && this._plan.to.y === food.y) {
-        // TODO: reassess path feasibility?
         this._plan = follow(planner, this._plan);
         return this._plan;
       }
@@ -184,37 +237,19 @@ class FoodTracker extends NeedTracker {
     }
 
     if (
-      (planner.landed || planner.crawling) && // if this is removed, the groblin will explore every possible path when it's still floating downward
+      (planner.landed || planner.crawling) && // if this is removed, the groblin will explore every possible path when it's still falling
       (this._plan.type !== "move" ||
         Math.sqrt((this._plan.to.x - planner.x) ** 2 + (this._plan.to.y - planner.y) ** 2) < 0.5)
     ) {
-      const restingOn = { x: Math.round(planner.x), y: Math.round(planner.y) };
-      for (
-        let x = Math.round(planner.vision * this._exploreDirection.x);
-        this._exploreDirection.x > 0 ? x > 0 : x < 0;
-        x -= this._exploreDirection.x
-      ) {
-        for (let y = -Math.round(planner.vision); y <= Math.round(planner.vision); y++) {
-          if (
-            Math.sqrt(x ** 2 + y ** 2) <= planner.vision &&
-            view.grid.isInside(restingOn.x + x, restingOn.y + y) &&
-            view.grid.isWalkableAt(restingOn.x + x, restingOn.y + y)
-          ) {
-            const target = {
-              x: restingOn.x + x,
-              y: restingOn.y + y
-            };
-            const path = route(planner, target, view.grid);
-            if (path.length > 0) {
-              this._plan = {
-                type: "move",
-                to: target,
-                path
-              };
-              return this._plan;
-            }
-          }
-        }
+      const path = explore(planner, view.grid, this._exploreDirection.x);
+      if (path.length > 1) {
+        // use 1 because otherwise the groblin will jump in place
+        this._plan = {
+          type: "move",
+          to: { x: path[path.length - 1][0], y: path[path.length - 1][1] },
+          path
+        };
+        return this._plan;
       }
       this._exploreDirection.x *= -1;
     }

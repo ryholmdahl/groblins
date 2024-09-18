@@ -7,7 +7,6 @@ import type { Entries } from "type-fest";
 import PF from "pathfinding";
 
 const TERMINAL_VELOCITY = 10;
-const BERRY_TIMER_MAX = 0.1;
 const GRAVITY = 100;
 const JUMP_POP = 15;
 const WALL_ELASTICITY = 0.1;
@@ -235,7 +234,6 @@ class World {
     grid: new PF.Grid(1, 1)
   };
   positions: Map<{ x: number; y: number }, Array<EntityWithComponents<["positioned"]>>> = new Map();
-  berryTimer: number = BERRY_TIMER_MAX;
   initialized: boolean = false;
   keys: Set<string> = new Set();
   // TODO: make this a quadtree
@@ -284,12 +282,21 @@ class World {
       // Remove the existing block
       this.remove(existingBlock);
       // Create a Cave in its place
-      this.add(
-        cave({
-          x: proposed.x,
-          y: proposed.y
-        })
-      );
+      if (existingBlock.passthrough === "solid") {
+        this.add(
+          cave({
+            x: proposed.x,
+            y: proposed.y
+          })
+        );
+      } else if (existingBlock.passthrough === "climbable") {
+        this.add(
+          block({
+            x: proposed.x,
+            y: proposed.y
+          })
+        );
+      }
     } else {
       // Add a new block if there isn't one already
       if (
@@ -403,22 +410,28 @@ class World {
         }
       }
       this.updateGrid(allCoords);
-    }
-
-    this.berryTimer -= delta;
-    if (this.berryTimer <= 0) {
-      this.berryTimer = BERRY_TIMER_MAX;
-      this.add(
-        berry({
-          x: Math.round(2 + Math.random() * (this.width - 5)),
-          y: 2,
-          width: 0.9,
-          height: 0.9,
-          density: 1,
-          velocity: { x: 0, y: 0 },
-          food: 20
-        })
-      );
+      const walkable: { x: number; y: number }[] = [];
+      for (let i = 0; i < this.width; i++) {
+        for (let j = 0; j < this.height; j++) {
+          if (this.view.grid.isWalkableAt(i, j)) {
+            walkable.push({ x: i, y: j });
+          }
+        }
+      }
+      for (let i = 0; i < walkable.length / 100; i++) {
+        const position = walkable[Math.floor(Math.random() * walkable.length)];
+        this.add(
+          berry({
+            x: position.x,
+            y: position.y,
+            width: 0.9,
+            height: 0.9,
+            density: 1,
+            velocity: { x: 0, y: 0 },
+            food: 20
+          })
+        );
+      }
     }
 
     const applyGravity = (movable: EntityWithComponents<["movable"]>) => {
@@ -614,14 +627,19 @@ class SpritePool {
   private free: Map<Texture, ContainerChild[]> = new Map();
   private blockSize: number;
   private app: Application;
+  private zIndices: Map<EntityWithComponents<["positioned"]>, number> = new Map();
 
   constructor(app: Application, blockSize: number) {
     this.app = app;
     this.blockSize = blockSize;
   }
 
-  init(entity: EntityWithComponents<["positioned"]>, texture: Texture) {
+  init(
+    entity: EntityWithComponents<["positioned"]>,
+    { texture, zIndex }: { texture: Texture; zIndex: number }
+  ) {
     this.textures.set(entity, texture);
+    this.zIndices.set(entity, zIndex);
   }
 
   get(entity: EntityWithComponents<["positioned"]>): ContainerChild {
@@ -629,13 +647,16 @@ class SpritePool {
       return this.used.get(entity)!;
     }
     const texture = this.textures.get(entity)!;
+    const zIndex = this.zIndices.get(entity)!;
     if (this.free.has(texture) && this.free.get(texture)!.length > 0) {
       const sprite = this.free.get(texture)!.pop()!;
       sprite.visible = true;
+      sprite.zIndex = zIndex;
       this.used.set(entity, sprite);
       return sprite;
     }
     const sprite = new Sprite(texture);
+    sprite.zIndex = zIndex;
     sprite.anchor.set(0.5);
     sprite.scale =
       ((this.blockSize * entity.width) / texture.width,
@@ -708,6 +729,7 @@ class PixiWorld extends World {
   add<T extends EntityWithComponents<["positioned"]>>(object: T): T {
     super.add(object);
     let texture: Texture | undefined = undefined;
+    let zIndex: number = 0;
     let textStyle: TextStyleOptions | undefined = undefined;
     if (hasComponents(object, ["groblin"])) {
       texture = this.textures.groblin;
@@ -717,6 +739,7 @@ class PixiWorld extends World {
         fill: "white",
         align: "center"
       };
+      zIndex = 2;
     }
     if (hasComponents(object, ["edible"])) {
       texture = this.textures.berry;
@@ -726,15 +749,18 @@ class PixiWorld extends World {
         fill: "white",
         align: "center"
       };
+      zIndex = 1;
     }
     if (hasComponents(object, ["collidable"]) && object.passthrough === "solid") {
       texture = this.textures.block;
+      zIndex = 0;
     }
     if (hasComponents(object, ["collidable"]) && object.passthrough === "climbable") {
       texture = this.textures.cave;
+      zIndex = 0;
     }
     if (texture) {
-      this.sprites.init(object, texture);
+      this.sprites.init(object, { texture, zIndex });
     }
     if (textStyle) {
       const text = new BitmapText({ text: "foobar", style: textStyle });
@@ -778,6 +804,7 @@ class PixiWorld extends World {
               sprite.alpha = 0.5;
               sprite.anchor.set(0.5);
               sprite.scale.set(this.textures.groblin.width / this.blockSize / 4);
+              sprite.zIndex = 1;
               this.app.stage.addChild(sprite);
               this.pathSprites.get(groblin)!.push(sprite);
             }
@@ -842,12 +869,17 @@ class PixiWorld extends World {
       this.sprites.get(object).y = object.y * this.blockSize + this.pan.y;
       if (viewedObjects.has(object)) {
         this.sprites.get(object).alpha = 1;
+        if (this.followFields.has(object)) {
+          this.followFields.get(object)!.visible = true;
+        }
       } else {
-        this.sprites.get(object).alpha = 0.5;
+        this.sprites.get(object).alpha = 0;
+        if (this.followFields.has(object)) {
+          this.followFields.get(object)!.visible = false;
+        }
       }
       const text = this.followFields.get(object);
       if (text) {
-        text.visible = true;
         text.x = object.x * this.blockSize + this.pan.x;
         text.y = object.y * this.blockSize + this.pan.y;
         if (hasComponents(object, ["movable", "groblin"])) {

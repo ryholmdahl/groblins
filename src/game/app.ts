@@ -2,6 +2,7 @@ import { Application, Assets } from "pixi.js";
 import bunnyPng from "../../resources/bunny.png";
 import cherryPng from "../../resources/cherries.png";
 import blockPng from "../../resources/icon.png";
+import cavePng from "../../resources/icon_brown.png";
 import { PixiWorld } from "./world";
 import type { World } from "./world";
 import { FoodTracker, RelaxTracker } from "./groblin";
@@ -30,7 +31,7 @@ async function createApp() {
     groblin: await Assets.load(bunnyPng),
     berry: await Assets.load(cherryPng),
     block: await Assets.load(blockPng),
-    cave: await Assets.load(cherryPng)
+    cave: await Assets.load(cavePng)
   });
 
   const terrain = generateTerrain(width, height);
@@ -73,26 +74,6 @@ async function createApp() {
         relax: new RelaxTracker(50, 100)
       },
       name: "Greebus"
-    })
-  );
-
-  world.add(
-    groblin({
-      x: 40,
-      y: 5,
-      width: 0.9, // keep objects slightly narrower so they don't get stuck between blocks
-      height: 1,
-      density: 1,
-      velocity: { x: 0, y: 0 },
-      needs: {
-        food: new FoodTracker(50, 100, {
-          starving: 10,
-          hungry: 30,
-          full: 70
-        }),
-        relax: new RelaxTracker(50, 100)
-      },
-      name: "Zek"
     })
   );
 

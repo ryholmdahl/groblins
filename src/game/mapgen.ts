@@ -8,7 +8,7 @@ function generateTerrain(
   y: number;
   cave: boolean;
 }[] {
-  const peaks = new Array(width).fill(0).map((_, i) => ({ x: i, y: height / 2 }));
+  const peaks = new Array(width).fill(0).map((_, i) => ({ x: i, y: 10 }));
   for (let i = 0; i < n_sines; i++) {
     const amplitude = Math.random() * amplitudeX;
     const frequency = Math.random() / 2;
@@ -25,7 +25,7 @@ function generateTerrain(
   peaks.forEach((peak) => {
     const peakY = Math.floor(peak.y);
     for (let y = peakY; y < height; y++) {
-      if (Math.random() <= Math.min(0.5, (y - peakY) / (height - peakY))) {
+      if (Math.random() <= 0.4 && y !== peakY) {
         terrain[peak.x][y] = true;
       }
     }

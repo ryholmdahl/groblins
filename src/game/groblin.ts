@@ -83,29 +83,40 @@ function explore(
   grid: PF.Grid,
   exploreDirection: 1 | -1
 ) {
+  function getKey(x: number, y: number) {
+    return x + "," + y;
+  }
+
+  function dist(x1: number, y1: number, x2: number, y2: number) {
+    return Math.sign(x2 - x1) === exploreDirection && Math.abs(x2 - x1) >= 1
+      ? Math.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2)
+      : -1;
+  }
   // the goal here is not to get to any particular point, but to find the path that goes the farthest from the groblin
   // while still being in vision range
-  const visited = new Set<string>();
-  const toVisit: { x: number; y: number; path: number[][] }[] = [
+  const shortestPathToPoint = new Map<string, [number, number][]>();
+  const toVisit: { x: number; y: number; path: [number, number][] }[] = [
     {
       x: Math.round(planner.x),
       y: Math.round(planner.y),
       path: []
     }
   ];
-  let longest: { x: number; y: number; path: number[][] } | undefined = undefined;
+  let farthestPoint: { x: number; y: number } = {
+    x: Math.round(planner.x),
+    y: Math.round(planner.y)
+  };
   while (toVisit.length > 0) {
-    const current = toVisit.pop();
-    if (current === undefined) {
-      break;
-    }
-    visited.add(current.x + "," + current.y);
-    const distance = Math.sqrt((current.x - planner.x) ** 2 + (current.y - planner.y) ** 2);
+    const current = toVisit.pop()!;
     if (
-      longest === undefined ||
-      distance > Math.sqrt((longest.x - planner.x) ** 2 + (longest.y - planner.y) ** 2)
+      !shortestPathToPoint.has(getKey(current.x, current.y)) ||
+      current.path.length < shortestPathToPoint.get(getKey(current.x, current.y))!.length
     ) {
-      longest = current;
+      shortestPathToPoint.set(getKey(current.x, current.y), current.path);
+    }
+    const distance = dist(current.x, current.y, planner.x, planner.y);
+    if (distance > dist(farthestPoint.x, farthestPoint.y, planner.x, planner.y)) {
+      farthestPoint = { x: current.x, y: current.y };
     }
     const neighbors = grid.getNeighbors(
       grid.getNodeAt(current.x, current.y),
@@ -113,23 +124,21 @@ function explore(
     );
     for (const neighbor of neighbors) {
       if (
-        visited.has(neighbor.x + "," + neighbor.y) ||
-        (exploreDirection === 1 && neighbor.x < planner.x) ||
-        (exploreDirection === -1 && neighbor.x > planner.x) ||
-        !grid.isWalkableAt(neighbor.x, neighbor.y) ||
-        !grid.isInside(neighbor.x, neighbor.y) ||
-        Math.sqrt((neighbor.x - planner.x) ** 2 + (neighbor.y - planner.y) ** 2) > planner.vision
+        grid.isInside(neighbor.x, neighbor.y) &&
+        grid.isWalkableAt(neighbor.x, neighbor.y) &&
+        Math.sqrt((neighbor.x - planner.x) ** 2 + (neighbor.y - planner.y) ** 2) < planner.vision &&
+        (!shortestPathToPoint.has(getKey(neighbor.x, neighbor.y)) ||
+          shortestPathToPoint.get(getKey(neighbor.x, neighbor.y))!.length > current.path.length + 1)
       ) {
-        continue;
+        toVisit.push({
+          x: neighbor.x,
+          y: neighbor.y,
+          path: [...current.path, [neighbor.x, neighbor.y]]
+        });
       }
-      toVisit.push({
-        x: neighbor.x,
-        y: neighbor.y,
-        path: [...current.path, [neighbor.x, neighbor.y]]
-      });
     }
   }
-  return longest?.path ?? [];
+  return shortestPathToPoint.get(getKey(farthestPoint.x, farthestPoint.y)) ?? [];
 }
 
 function follow(planner: EntityWithComponents<["positioned"]>, plan: Plan & { type: "move" }) {
@@ -231,7 +240,7 @@ class FoodTracker extends NeedTracker {
           path
         };
         return this._plan;
-      } else {
+      } else if (planner.landed || planner.crawling) {
         this._inaccessibleFood.add(food);
       }
     }
